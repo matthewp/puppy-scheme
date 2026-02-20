@@ -1,0 +1,4 @@
+;; expect-no-import: stream-write
+;; expect-max-size: 420
+;; compile-only: true
+(if (not #f) 42 0)

@@ -1,0 +1,1249 @@
+;;; component.scm — Component Model binary encoder
+;;; Wraps a core WASM module in a component binary based on a parsed WIT world.
+
+;; Emit a length-prefixed name (same as wbuf-name!)
+(define (comp-emit-name! buf str)
+  (wbuf-name! buf str))
+
+;; Emit a component value type (WIT type → binary encoding)
+(define (comp-emit-valtype! buf ty)
+  (cond
+    ((and (pair? ty) (eq? (car ty) 'prim))
+     (let ((name (cadr ty)))
+       (cond
+         ((string=? name "bool")   (wbuf-byte! buf CVT-BOOL))
+         ((string=? name "s8")     (wbuf-byte! buf CVT-S8))
+         ((string=? name "u8")     (wbuf-byte! buf CVT-U8))
+         ((string=? name "s16")    (wbuf-byte! buf CVT-S16))
+         ((string=? name "u16")    (wbuf-byte! buf CVT-U16))
+         ((string=? name "s32")    (wbuf-byte! buf CVT-S32))
+         ((string=? name "u32")    (wbuf-byte! buf CVT-U32))
+         ((string=? name "s64")    (wbuf-byte! buf CVT-S64))
+         ((string=? name "u64")    (wbuf-byte! buf CVT-U64))
+         ((string=? name "f32")    (wbuf-byte! buf CVT-F32))
+         ((string=? name "f64")    (wbuf-byte! buf CVT-F64))
+         ((string=? name "char")   (wbuf-byte! buf CVT-CHAR))
+         ((string=? name "string") (wbuf-byte! buf CVT-STRING))
+         (else (error (string-append "unknown primitive type: " name))))))
+    ((and (pair? ty) (eq? (car ty) 'list))
+     (wbuf-byte! buf CVT-LIST)
+     (comp-emit-valtype! buf (cadr ty)))
+    ((and (pair? ty) (eq? (car ty) 'option))
+     (wbuf-byte! buf CVT-OPTION)
+     (comp-emit-valtype! buf (cadr ty)))
+    ((and (pair? ty) (eq? (car ty) 'result))
+     (wbuf-byte! buf CVT-RESULT)
+     (let ((ok-ty (cadr ty))
+           (err-ty (caddr ty)))
+       (if ok-ty
+           (begin (wbuf-byte! buf 1) (comp-emit-valtype! buf ok-ty))
+           (wbuf-byte! buf 0))
+       (if err-ty
+           (begin (wbuf-byte! buf 1) (comp-emit-valtype! buf err-ty))
+           (wbuf-byte! buf 0))))
+    ((and (pair? ty) (eq? (car ty) 'tuple))
+     (wbuf-byte! buf CVT-TUPLE)
+     (wbuf-u32! buf (length (cdr ty)))
+     (for-each (lambda (t) (comp-emit-valtype! buf t)) (cdr ty)))
+    ((and (pair? ty) (eq? (car ty) 'record))
+     (wbuf-byte! buf CVT-RECORD)
+     (wbuf-u32! buf (length (cdr ty)))
+     (for-each (lambda (field)
+                 (comp-emit-name! buf (car field))
+                 (comp-emit-valtype! buf (cdr field)))
+               (cdr ty)))
+    (else (error "unsupported component value type"))))
+
+;; Emit a component functype
+(define (comp-emit-functype! buf func)
+  (let ((params (wit-func-params func))
+        (result (wit-func-result func)))
+    (wbuf-byte! buf CT-FUNC)
+    ;; params
+    (wbuf-u32! buf (length params))
+    (for-each (lambda (p)
+                (comp-emit-name! buf (car p))
+                (comp-emit-valtype! buf (cdr p)))
+              params)
+    ;; result
+    (if result
+        (begin (wbuf-byte! buf #x00) (comp-emit-valtype! buf result))
+        (begin (wbuf-byte! buf #x01) (wbuf-u32! buf 0)))))
+
+;; Check if a WIT type needs linear memory for marshalling
+(define (wit-type-needs-memory? ty)
+  (cond
+    ((not ty) #f)
+    ((and (pair? ty) (eq? (car ty) 'prim))
+     (string=? (cadr ty) "string"))
+    ((and (pair? ty) (eq? (car ty) 'list)) #t)
+    ((and (pair? ty) (eq? (car ty) 'option))
+     (wit-type-needs-memory? (cadr ty)))
+    ((and (pair? ty) (eq? (car ty) 'result))
+     (or (wit-type-needs-memory? (cadr ty))
+         (wit-type-needs-memory? (caddr ty))))
+    ((and (pair? ty) (eq? (car ty) 'tuple))
+     (let loop ((ts (cdr ty)))
+       (and (pair? ts) (or (wit-type-needs-memory? (car ts)) (loop (cdr ts))))))
+    ((and (pair? ty) (eq? (car ty) 'record))
+     (let loop ((fs (cdr ty)))
+       (and (pair? fs) (or (wit-type-needs-memory? (cdar fs)) (loop (cdr fs))))))
+    (else #f)))
+
+;; Check if a WIT function needs linear memory
+(define (wit-func-needs-memory? func)
+  (or (wit-type-needs-memory? (wit-func-result func))
+      (let loop ((params (wit-func-params func)))
+        (and (pair? params)
+             (or (wit-type-needs-memory? (cdar params))
+                 (loop (cdr params)))))))
+
+;; Flatten a WIT type to its core ABI representation (list of core types)
+;; For now: numeric → (i32), string → (i32 i32), etc.
+(define (wit-type-core-types ty)
+  (cond
+    ((not ty) '())
+    ((and (pair? ty) (eq? (car ty) 'prim))
+     (let ((name (cadr ty)))
+       (cond
+         ((or (string=? name "bool") (string=? name "u8") (string=? name "s8")
+              (string=? name "u16") (string=? name "s16")
+              (string=? name "u32") (string=? name "s32")
+              (string=? name "char"))
+          '(i32))
+         ((or (string=? name "u64") (string=? name "s64"))
+          '(i64))
+         ((string=? name "f32") '(f32))
+         ((string=? name "f64") '(f64))
+         ((string=? name "string") '(i32 i32))
+         (else (error (string-append "unknown primitive: " name))))))
+    ((and (pair? ty) (eq? (car ty) 'list)) '(i32 i32))
+    (else '(i32))))
+
+;; Count the flat core params for a WIT function
+(define (wit-func-core-param-count func)
+  (let loop ((params (wit-func-params func)) (n 0))
+    (if (null? params)
+        n
+        (loop (cdr params) (+ n (length (wit-type-core-types (cdar params))))))))
+
+;; Count the flat core results for a WIT function
+(define (wit-func-core-result-count func)
+  (if (wit-func-result func)
+      (length (wit-type-core-types (wit-func-result func)))
+      0))
+
+;; Determine if a function needs a retptr (more than 1 flat result)
+(define (wit-func-needs-retptr? func)
+  (> (wit-func-core-result-count func) 1))
+
+;; Extract named function exports from a WIT world
+(define (wit-world-func-exports world)
+  (let loop ((items (wit-world-items world)) (acc '()))
+    (if (null? items)
+        (reverse acc)
+        (let ((item (car items)))
+          (if (and (pair? item) (eq? (car item) 'export)
+                   (= (length item) 3))
+              (loop (cdr items) (cons (caddr item) acc))
+              (loop (cdr items) acc))))))
+
+;; Extract named function imports from a WIT world
+(define (wit-world-func-imports world)
+  (let loop ((items (wit-world-items world)) (acc '()))
+    (if (null? items)
+        (reverse acc)
+        (let ((item (car items)))
+          (if (and (pair? item) (eq? (car item) 'import)
+                   (= (length item) 3))
+              (loop (cdr items) (cons (caddr item) acc))
+              (loop (cdr items) acc))))))
+
+;;; --- Component binary generation ---
+
+;; Wrap a core module in a component binary.
+;; core-module-bytes: bytevector of the compiled core WASM module
+;; world: parsed WIT world
+;; Returns: bytevector of the component binary
+(define (wrap-component core-module-bytes world)
+  (let* ((exports (wit-world-func-exports world))
+         (imports (wit-world-func-imports world))
+         (any-needs-memory (or (let loop ((fs exports))
+                                 (and (pair? fs)
+                                      (or (wit-func-needs-memory? (car fs))
+                                          (loop (cdr fs)))))
+                               (let loop ((fs imports))
+                                 (and (pair? fs)
+                                      (or (wit-func-needs-memory? (car fs))
+                                          (loop (cdr fs)))))))
+         (out (wbuf-make))
+         (sec (wbuf-make)))
+
+    ;; Component header
+    (wbuf-bytes-list! out COMPONENT-HEADER)
+
+    ;; Track indices as we go
+    ;; Component type indices (from type sections)
+    ;; Component func indices (from canon lift/lower)
+    ;; Core func indices (from aliases + canon lower)
+    ;; Core memory indices (from aliases)
+
+    (let* ((nimport-funcs (length imports))
+           (nexport-funcs (length exports))
+           ;; Component type index allocation:
+           ;; For imports: we need instance types or func types
+           ;; For exports: we need func types
+           ;; Simplest approach: one functype per import, one per export
+           (import-type-start 0)
+           (export-type-start nimport-funcs))
+
+      ;; === Section 7: types for import functions ===
+      (when (> nimport-funcs 0)
+        (wbuf-reset! sec)
+        (wbuf-u32! sec nimport-funcs)
+        (for-each (lambda (func) (comp-emit-functype! sec func)) imports)
+        (wbuf-section! out CSEC-TYPE sec))
+
+      ;; === Section 10: imports ===
+      (when (> nimport-funcs 0)
+        (wbuf-reset! sec)
+        (wbuf-u32! sec nimport-funcs)
+        (let loop ((funcs imports) (tidx import-type-start))
+          (when (pair? funcs)
+            (wbuf-byte! sec #x00) ;; plain name discriminant
+            (comp-emit-name! sec (wit-func-name (car funcs)))
+            (wbuf-byte! sec CEXT-FUNC) ;; func
+            (wbuf-u32! sec tidx)
+            (loop (cdr funcs) (+ tidx 1))))
+        (wbuf-section! out CSEC-IMPORT sec))
+
+      ;; === Section 8: canon lower for imports ===
+      ;; Each import func gets lowered to a core func
+      ;; Core func indices: 0..nimport-funcs-1
+      (when (> nimport-funcs 0)
+        (wbuf-reset! sec)
+        (wbuf-u32! sec nimport-funcs)
+        (let loop ((funcs imports) (fidx 0))
+          (when (pair? funcs)
+            (wbuf-byte! sec CANON-LOWER) (wbuf-byte! sec #x00)
+            (wbuf-u32! sec fidx) ;; component func index
+            (if (and any-needs-memory (wit-func-needs-memory? (car funcs)))
+                ;; With memory + realloc + utf8
+                (begin
+                  (wbuf-u32! sec 3) ;; 3 options
+                  (wbuf-byte! sec CANONOPT-MEMORY) (wbuf-u32! sec 0)
+                  (wbuf-byte! sec CANONOPT-REALLOC) (wbuf-u32! sec 0)
+                  (wbuf-byte! sec CANONOPT-UTF8))
+                ;; No options needed for pure numeric
+                (wbuf-u32! sec 0))
+            (loop (cdr funcs) (+ fidx 1))))
+        (wbuf-section! out CSEC-CANON sec))
+
+      ;; === Build core instance args (lowered imports grouped by name) ===
+      ;; For imports, we need to create core instances that the core module
+      ;; can import from. Each lowered import goes into a core inline-export
+      ;; instance, grouped by the import namespace.
+      ;;
+      ;; For now, simple case: each import func becomes a separate inline
+      ;; export instance at "env"
+
+      ;; === Section 2: core inline-export instances for lowered imports ===
+      (when (> nimport-funcs 0)
+        (wbuf-reset! sec)
+        (wbuf-u32! sec 1) ;; one inline-export instance
+        (wbuf-byte! sec #x01) ;; inline exports
+        (wbuf-u32! sec nimport-funcs)
+        (let loop ((funcs imports) (cidx 0))
+          (when (pair? funcs)
+            (comp-emit-name! sec (wit-func-name (car funcs)))
+            (wbuf-byte! sec CSORT-FUNC)
+            (wbuf-u32! sec cidx) ;; core func from canon lower
+            (loop (cdr funcs) (+ cidx 1))))
+        (wbuf-section! out CSEC-CORE-INSTANCE sec))
+
+      ;; === Section 1: core module ===
+      (wbuf-reset! sec)
+      (wbuf-bytes! sec core-module-bytes 0 (bytevector-length core-module-bytes))
+      (wbuf-section! out CSEC-CORE-MODULE sec)
+
+      ;; === Section 2: core instance — instantiate core module ===
+      (wbuf-reset! sec)
+      (wbuf-u32! sec 1) ;; 1 instance
+      (wbuf-byte! sec #x00) ;; instantiate
+      (wbuf-u32! sec 0) ;; module index 0
+      (if (> nimport-funcs 0)
+          ;; With import instance
+          (begin
+            (wbuf-u32! sec 1) ;; 1 arg
+            (comp-emit-name! sec "env")
+            (wbuf-byte! sec CSORT-INSTANCE)
+            (wbuf-u32! sec 0)) ;; core instance 0 (the inline-export one)
+          ;; No args
+          (wbuf-u32! sec 0))
+      (wbuf-section! out CSEC-CORE-INSTANCE sec)
+
+      ;; The core instance index for the instantiated module:
+      ;; If we have imports: core instance 0 = inline exports, core instance 1 = module
+      ;; If no imports: core instance 0 = module
+      (let ((module-inst-idx (if (> nimport-funcs 0) 1 0)))
+
+        ;; === Section 6: aliases from core instance ===
+        ;; We need to alias out the exported functions (and memory/realloc if needed)
+        (let* ((alias-count (+ nexport-funcs
+                               (if any-needs-memory 2 0)))
+               ;; Core func index tracking for aliases
+               ;; Start after lowered imports
+               (alias-core-func-start nimport-funcs))
+
+          (wbuf-reset! sec)
+          (wbuf-u32! sec alias-count)
+
+          ;; Alias memory (if needed)
+          (when any-needs-memory
+            ;; alias core export $inst "memory" (core memory)
+            (wbuf-byte! sec #x00) (wbuf-byte! sec CSORT-MEMORY) ;; sort: core memory
+            (wbuf-byte! sec ALIAS-CORE-EXPORT)
+            (wbuf-u32! sec module-inst-idx)
+            (comp-emit-name! sec "memory")
+            ;; alias core export $inst "cabi_realloc" (core func)
+            (wbuf-byte! sec #x00) (wbuf-byte! sec CSORT-FUNC) ;; sort: core func
+            (wbuf-byte! sec ALIAS-CORE-EXPORT)
+            (wbuf-u32! sec module-inst-idx)
+            (comp-emit-name! sec "cabi_realloc"))
+
+          ;; Alias each export function
+          (for-each
+           (lambda (func)
+             (wbuf-byte! sec #x00) (wbuf-byte! sec CSORT-FUNC) ;; sort: core func
+             (wbuf-byte! sec ALIAS-CORE-EXPORT)
+             (wbuf-u32! sec module-inst-idx)
+             (comp-emit-name! sec (wit-func-name func)))
+           exports)
+
+          (wbuf-section! out CSEC-ALIAS sec)
+
+          ;; === Section 7: types for export functions ===
+          (when (> nexport-funcs 0)
+            (wbuf-reset! sec)
+            (wbuf-u32! sec nexport-funcs)
+            (for-each (lambda (func) (comp-emit-functype! sec func)) exports)
+            (wbuf-section! out CSEC-TYPE sec))
+
+          ;; === Section 8: canon lift for exports ===
+          (when (> nexport-funcs 0)
+            (wbuf-reset! sec)
+            (wbuf-u32! sec nexport-funcs)
+            ;; Core func indices from aliases:
+            ;; If memory aliased: memory=core_memory_0, realloc=core_func_N, then export funcs
+            ;; Core func indices for aliased exports:
+            ;; nimport-funcs (from canon lower) + (if memory: 1 for realloc) + 0,1,2...
+            (let ((realloc-core-idx (if any-needs-memory
+                                        nimport-funcs ;; first aliased core func is realloc
+                                        -1))
+                  (export-core-func-start (+ nimport-funcs
+                                             (if any-needs-memory 1 0))))
+              (let loop ((funcs exports) (i 0) (tidx export-type-start))
+                (when (pair? funcs)
+                  (wbuf-byte! sec CANON-LIFT) (wbuf-byte! sec #x00)
+                  (wbuf-u32! sec (+ export-core-func-start i)) ;; core func index
+                  (if (and any-needs-memory (wit-func-needs-memory? (car funcs)))
+                      ;; With options
+                      (begin
+                        (wbuf-u32! sec 3) ;; 3 options
+                        (wbuf-byte! sec CANONOPT-UTF8)
+                        (wbuf-byte! sec CANONOPT-MEMORY) (wbuf-u32! sec 0)
+                        (wbuf-byte! sec CANONOPT-REALLOC) (wbuf-u32! sec realloc-core-idx))
+                      ;; No options
+                      (wbuf-u32! sec 0))
+                  (wbuf-u32! sec tidx) ;; component type index
+                  (loop (cdr funcs) (+ i 1) (+ tidx 1)))))
+            (wbuf-section! out CSEC-CANON sec))
+
+          ;; === Section 11: exports ===
+          (when (> nexport-funcs 0)
+            (wbuf-reset! sec)
+            (wbuf-u32! sec nexport-funcs)
+            (let loop ((funcs exports) (fidx 0))
+              (when (pair? funcs)
+                (wbuf-byte! sec #x00) ;; plain name discriminant
+                (comp-emit-name! sec (wit-func-name (car funcs)))
+                (wbuf-byte! sec #x01) ;; sort = func
+                (wbuf-u32! sec (+ nimport-funcs fidx)) ;; component func index (imports come first from canon lower)
+                (wbuf-byte! sec #x00) ;; no type annotation
+                (loop (cdr funcs) (+ fidx 1))))
+            (wbuf-section! out CSEC-EXPORT sec)))))
+
+    ;; Return the component binary
+    (wbuf->bytevector out)))
+
+;;; --- WASI P2 Component wrapping ---
+;;; Wraps a core WASM module (compiled for P2 imports) in a WASI P2 component.
+;;; The core module is expected to:
+;;;   - Import memory from "mem"/"memory"
+;;;   - Import functions from "env" (conditionally: exit, get-stdout, get-stderr, stream-write)
+;;;   - Export "run" : () -> i32
+
+;; Build the inline memory module with cabi_realloc (used by canonical ABI)
+(define (build-cabi-realloc-module)
+  (let ((out (wbuf-make))
+        (sec (wbuf-make)))
+    (wbuf-bytes-list! out WASM-HEADER)
+    ;; Type: (i32,i32,i32,i32)->i32
+    (wbuf-reset! sec)
+    (wbuf-u32! sec 1)
+    (wbuf-byte! sec TYPE-FUNC) (wbuf-u32! sec 4)
+    (wbuf-byte! sec TYPE-I32) (wbuf-byte! sec TYPE-I32)
+    (wbuf-byte! sec TYPE-I32) (wbuf-byte! sec TYPE-I32)
+    (wbuf-u32! sec 1) (wbuf-byte! sec TYPE-I32)
+    (wbuf-section! out SEC-TYPE sec)
+    ;; Function: 1 func of type 0
+    (wbuf-reset! sec)
+    (wbuf-u32! sec 1) (wbuf-u32! sec 0)
+    (wbuf-section! out SEC-FUNCTION sec)
+    ;; Memory: 1 page min
+    (wbuf-reset! sec)
+    (wbuf-u32! sec 1) (wbuf-byte! sec #x00) (wbuf-u32! sec 1)
+    (wbuf-section! out SEC-MEMORY sec)
+    ;; Global: bump pointer at 4096
+    (wbuf-reset! sec)
+    (wbuf-u32! sec 1)
+    (wbuf-byte! sec TYPE-I32) (wbuf-byte! sec #x01) ;; i32, mutable
+    (wbuf-byte! sec OP-I32-CONST) (wbuf-i32! sec 4096) (wbuf-byte! sec OP-END)
+    (wbuf-section! out SEC-GLOBAL sec)
+    ;; Exports: "memory" (memory 0), "cabi_realloc" (func 0)
+    (wbuf-reset! sec)
+    (wbuf-u32! sec 2)
+    (wbuf-name! sec "memory") (wbuf-byte! sec #x02) (wbuf-u32! sec 0)
+    (wbuf-name! sec "cabi_realloc") (wbuf-byte! sec #x00) (wbuf-u32! sec 0)
+    (wbuf-section! out SEC-EXPORT sec)
+    ;; Code: bump allocator
+    (wbuf-reset! sec)
+    (wbuf-u32! sec 1)
+    (let ((body (wbuf-make)))
+      (wbuf-u32! body 1) (wbuf-u32! body 1) (wbuf-byte! body TYPE-I32) ;; 1 local: $ret
+      ;; aligned = (bump + align - 1) & ~(align - 1)
+      (wbuf-byte! body OP-GLOBAL-GET) (wbuf-u32! body 0)
+      (wbuf-byte! body OP-LOCAL-GET) (wbuf-u32! body 2) ;; align
+      (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 1)
+      (wbuf-byte! body OP-I32-SUB)
+      (wbuf-byte! body OP-I32-ADD)
+      (wbuf-byte! body OP-LOCAL-GET) (wbuf-u32! body 2)
+      (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 1)
+      (wbuf-byte! body OP-I32-SUB)
+      (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body -1)
+      (wbuf-byte! body OP-I32-XOR)
+      (wbuf-byte! body OP-I32-AND)
+      (wbuf-byte! body OP-LOCAL-SET) (wbuf-u32! body 4) ;; $ret
+      ;; new_bump = ret + new_size
+      (wbuf-byte! body OP-LOCAL-GET) (wbuf-u32! body 4)
+      (wbuf-byte! body OP-LOCAL-GET) (wbuf-u32! body 3) ;; new_size
+      (wbuf-byte! body OP-I32-ADD)
+      (wbuf-byte! body OP-GLOBAL-SET) (wbuf-u32! body 0)
+      ;; Grow memory if needed: if new_bump > memory.size * 65536
+      (wbuf-byte! body OP-GLOBAL-GET) (wbuf-u32! body 0)
+      (wbuf-byte! body OP-MEMORY-SIZE) (wbuf-u32! body 0)
+      (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 16)
+      (wbuf-byte! body OP-I32-SHL)
+      (wbuf-byte! body OP-I32-GT-S)
+      (wbuf-byte! body OP-IF) (wbuf-byte! body TYPE-VOID)
+        ;; pages_needed = (new_bump - mem_bytes + 65535) >> 16
+        (wbuf-byte! body OP-GLOBAL-GET) (wbuf-u32! body 0)
+        (wbuf-byte! body OP-MEMORY-SIZE) (wbuf-u32! body 0)
+        (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 16)
+        (wbuf-byte! body OP-I32-SHL)
+        (wbuf-byte! body OP-I32-SUB)
+        (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 65535)
+        (wbuf-byte! body OP-I32-ADD)
+        (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 16)
+        (wbuf-byte! body OP-I32-SHR-S)
+        (wbuf-byte! body OP-MEMORY-GROW) (wbuf-u32! body 0)
+        (wbuf-byte! body OP-DROP)
+      (wbuf-byte! body OP-END)
+      ;; return ret
+      (wbuf-byte! body OP-LOCAL-GET) (wbuf-u32! body 4)
+      (wbuf-byte! body OP-END)
+      (wbuf-func-body! sec body))
+    (wbuf-section! out SEC-CODE sec)
+    (wbuf->bytevector out)))
+
+;; Wrap a core module in a WASI P2 component binary.
+;; needs-io: when true, imports wasi:io/streams, wasi:cli/stdout, wasi:cli/stderr
+;; needs-exit: when true, imports wasi:cli/exit
+;; The core module is expected to import memory from "mem"/"memory"
+;; and functions from "env" (conditionally exit, get-stdout/get-stderr/stream-write).
+(define (wrap-wasi-component core-module-bytes needs-io needs-exit needs-clock needs-command-line needs-get-env needs-file-io)
+  (let* ((mem-mod-bytes (build-cabi-realloc-module))
+         (out (wbuf-make))
+         (sec (wbuf-make))
+         ;; Running counters
+         (next-type 0)
+         (next-inst 0)
+         (next-func 0)
+         (next-core-func 0))
+
+    (wbuf-bytes-list! out COMPONENT-HEADER)
+
+    ;; ===== WASI imports (conditional) =====
+    (let ((inst-exit -1)
+          (inst-streams -1)
+          (inst-stdout -1)
+          (inst-stderr -1)
+          (inst-stdin -1)
+          (ty-output-stream -1)
+          (ty-input-stream -1)
+          (ty-descriptor -1)
+          (inst-clock -1)
+          (inst-environment -1)
+          (inst-filesystem -1)
+          (inst-preopens -1))
+
+      ;; wasi:cli/exit
+      (when needs-exit
+        (let ((ty-result next-type))
+          (set! next-type (+ next-type 1))
+          (let ((ty-exit-ft next-type))
+            (set! next-type (+ next-type 1))
+            (let ((ty-exit-inst next-type))
+              (set! next-type (+ next-type 1))
+              (wbuf-reset! sec)
+              (wbuf-u32! sec 3)
+              (wbuf-byte! sec CVT-RESULT) (wbuf-byte! sec #x00) (wbuf-byte! sec #x00)
+              (wbuf-byte! sec CT-FUNC)
+              (wbuf-u32! sec 1) (wbuf-name! sec "status") (wbuf-u32! sec ty-result)
+              (wbuf-byte! sec #x01) (wbuf-u32! sec 0)
+              (wbuf-byte! sec CT-INSTANCE) (wbuf-u32! sec 2)
+              (wbuf-byte! sec IDECL-ALIAS) (wbuf-byte! sec CEXT-TYPE)
+              (wbuf-byte! sec ALIAS-OUTER) (wbuf-u32! sec 1) (wbuf-u32! sec ty-exit-ft)
+              (wbuf-byte! sec IDECL-EXPORT)
+              (wbuf-byte! sec #x00) (wbuf-name! sec "exit")
+              (wbuf-byte! sec CEXT-FUNC) (wbuf-u32! sec 0)
+              (wbuf-section! out CSEC-TYPE sec)
+              (set! inst-exit next-inst)
+              (set! next-inst (+ next-inst 1))
+              (wbuf-reset! sec) (wbuf-u32! sec 1)
+              (wbuf-byte! sec #x00) (wbuf-name! sec "wasi:cli/exit@0.2.0")
+              (wbuf-byte! sec CEXT-INSTANCE) (wbuf-u32! sec ty-exit-inst)
+              (wbuf-section! out CSEC-IMPORT sec)))))
+      (when needs-io
+        ;; wasi:io/error
+        (let ((ty-io-error-inst next-type))
+          (set! next-type (+ next-type 1))
+          (wbuf-reset! sec) (wbuf-u32! sec 1)
+          (wbuf-byte! sec CT-INSTANCE) (wbuf-u32! sec 1)
+          (wbuf-byte! sec IDECL-EXPORT)
+          (wbuf-byte! sec #x00) (wbuf-name! sec "error")
+          (wbuf-byte! sec CEXT-TYPE) (wbuf-byte! sec #x01)
+          (wbuf-section! out CSEC-TYPE sec)
+          (let ((inst-io-error next-inst))
+            (set! next-inst (+ next-inst 1))
+            (wbuf-reset! sec) (wbuf-u32! sec 1)
+            (wbuf-byte! sec #x00) (wbuf-name! sec "wasi:io/error@0.2.0")
+            (wbuf-byte! sec CEXT-INSTANCE) (wbuf-u32! sec ty-io-error-inst)
+            (wbuf-section! out CSEC-IMPORT sec)
+            ;; Alias: error type
+            (let ((ty-error next-type))
+              (set! next-type (+ next-type 1))
+              (wbuf-reset! sec) (wbuf-u32! sec 1)
+              (wbuf-byte! sec CEXT-TYPE) (wbuf-byte! sec ALIAS-EXPORT)
+              (wbuf-u32! sec inst-io-error) (wbuf-name! sec "error")
+              (wbuf-section! out CSEC-ALIAS sec)
+
+              ;; wasi:io/streams
+              (let ((ty-streams-inst next-type)
+                    (streams-ndecls (if needs-file-io 16 11)))
+                (set! next-type (+ next-type 1))
+                (wbuf-reset! sec) (wbuf-u32! sec 1)
+                (wbuf-byte! sec CT-INSTANCE) (wbuf-u32! sec streams-ndecls)
+                (wbuf-byte! sec IDECL-ALIAS) (wbuf-byte! sec CEXT-TYPE)
+                (wbuf-byte! sec ALIAS-OUTER) (wbuf-u32! sec 1) (wbuf-u32! sec ty-error)
+                (wbuf-byte! sec IDECL-EXPORT)
+                (wbuf-byte! sec #x00) (wbuf-name! sec "error")
+                (wbuf-byte! sec CEXT-TYPE) (wbuf-byte! sec #x00) (wbuf-u32! sec 0)
+                (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-OWN) (wbuf-u32! sec 1)
+                (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-VARIANT) (wbuf-u32! sec 2)
+                (wbuf-name! sec "last-operation-failed") (wbuf-byte! sec #x01) (wbuf-u32! sec 2) (wbuf-byte! sec #x00)
+                (wbuf-name! sec "closed") (wbuf-byte! sec #x00) (wbuf-byte! sec #x00)
+                (wbuf-byte! sec IDECL-EXPORT)
+                (wbuf-byte! sec #x00) (wbuf-name! sec "stream-error")
+                (wbuf-byte! sec CEXT-TYPE) (wbuf-byte! sec #x00) (wbuf-u32! sec 3)
+                (wbuf-byte! sec IDECL-EXPORT)
+                (wbuf-byte! sec #x00) (wbuf-name! sec "output-stream")
+                (wbuf-byte! sec CEXT-TYPE) (wbuf-byte! sec #x01)
+                (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-BORROW) (wbuf-u32! sec 5)
+                (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-LIST) (wbuf-byte! sec CVT-U8)
+                (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-RESULT)
+                (wbuf-byte! sec #x00) (wbuf-byte! sec #x01) (wbuf-u32! sec 4)
+                (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CT-FUNC)
+                (wbuf-u32! sec 2)
+                (wbuf-name! sec "self") (wbuf-u32! sec 6)
+                (wbuf-name! sec "contents") (wbuf-u32! sec 7)
+                (wbuf-byte! sec #x00) (wbuf-u32! sec 8)
+                (wbuf-byte! sec IDECL-EXPORT)
+                (wbuf-byte! sec #x00) (wbuf-name! sec "[method]output-stream.blocking-write-and-flush")
+                (wbuf-byte! sec CEXT-FUNC) (wbuf-u32! sec 9)
+                ;; input-stream + blocking-read (when file-io needed)
+                (when needs-file-io
+                  ;; local type 10: export "input-stream" as resource
+                  (wbuf-byte! sec IDECL-EXPORT)
+                  (wbuf-byte! sec #x00) (wbuf-name! sec "input-stream")
+                  (wbuf-byte! sec CEXT-TYPE) (wbuf-byte! sec #x01)
+                  ;; local type 11: borrow<input-stream> (type 10)
+                  (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-BORROW) (wbuf-u32! sec 10)
+                  ;; local type 12: result<list<u8>, stream-error>
+                  ;; list<u8> = type 7, stream-error = type 4
+                  (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-RESULT)
+                  (wbuf-byte! sec #x01) (wbuf-u32! sec 7) (wbuf-byte! sec #x01) (wbuf-u32! sec 4)
+                  ;; local type 13: functype blocking-read(self: borrow<is>(11), len: u64) -> result(12)
+                  (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CT-FUNC)
+                  (wbuf-u32! sec 2)
+                  (wbuf-name! sec "self") (wbuf-u32! sec 11)
+                  (wbuf-name! sec "len") (wbuf-byte! sec CVT-U64)
+                  (wbuf-byte! sec #x00) (wbuf-u32! sec 12)
+                  ;; export "[method]input-stream.blocking-read"
+                  (wbuf-byte! sec IDECL-EXPORT)
+                  (wbuf-byte! sec #x00) (wbuf-name! sec "[method]input-stream.blocking-read")
+                  (wbuf-byte! sec CEXT-FUNC) (wbuf-u32! sec 13))
+                (wbuf-section! out CSEC-TYPE sec)
+                (set! inst-streams next-inst)
+                (set! next-inst (+ next-inst 1))
+                (wbuf-reset! sec) (wbuf-u32! sec 1)
+                (wbuf-byte! sec #x00) (wbuf-name! sec "wasi:io/streams@0.2.0")
+                (wbuf-byte! sec CEXT-INSTANCE) (wbuf-u32! sec ty-streams-inst)
+                (wbuf-section! out CSEC-IMPORT sec)
+                ;; Alias: output-stream type
+                (set! ty-output-stream next-type)
+                (set! next-type (+ next-type 1))
+                (wbuf-reset! sec) (wbuf-u32! sec 1)
+                (wbuf-byte! sec CEXT-TYPE) (wbuf-byte! sec ALIAS-EXPORT)
+                (wbuf-u32! sec inst-streams) (wbuf-name! sec "output-stream")
+                (wbuf-section! out CSEC-ALIAS sec)
+
+                ;; wasi:cli/stdout
+                (let ((ty-stdout-inst next-type))
+                  (set! next-type (+ next-type 1))
+                  (wbuf-reset! sec) (wbuf-u32! sec 1)
+                  (wbuf-byte! sec CT-INSTANCE) (wbuf-u32! sec 4)
+                  (wbuf-byte! sec IDECL-ALIAS) (wbuf-byte! sec CEXT-TYPE)
+                  (wbuf-byte! sec ALIAS-OUTER) (wbuf-u32! sec 1) (wbuf-u32! sec ty-output-stream)
+                  (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-OWN) (wbuf-u32! sec 0)
+                  (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CT-FUNC)
+                  (wbuf-u32! sec 0) (wbuf-byte! sec #x00) (wbuf-u32! sec 1)
+                  (wbuf-byte! sec IDECL-EXPORT)
+                  (wbuf-byte! sec #x00) (wbuf-name! sec "get-stdout")
+                  (wbuf-byte! sec CEXT-FUNC) (wbuf-u32! sec 2)
+                  (wbuf-section! out CSEC-TYPE sec)
+                  (set! inst-stdout next-inst)
+                  (set! next-inst (+ next-inst 1))
+                  (wbuf-reset! sec) (wbuf-u32! sec 1)
+                  (wbuf-byte! sec #x00) (wbuf-name! sec "wasi:cli/stdout@0.2.0")
+                  (wbuf-byte! sec CEXT-INSTANCE) (wbuf-u32! sec ty-stdout-inst)
+                  (wbuf-section! out CSEC-IMPORT sec))
+
+                ;; wasi:cli/stderr
+                (let ((ty-stderr-inst next-type))
+                  (set! next-type (+ next-type 1))
+                  (wbuf-reset! sec) (wbuf-u32! sec 1)
+                  (wbuf-byte! sec CT-INSTANCE) (wbuf-u32! sec 4)
+                  (wbuf-byte! sec IDECL-ALIAS) (wbuf-byte! sec CEXT-TYPE)
+                  (wbuf-byte! sec ALIAS-OUTER) (wbuf-u32! sec 1) (wbuf-u32! sec ty-output-stream)
+                  (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-OWN) (wbuf-u32! sec 0)
+                  (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CT-FUNC)
+                  (wbuf-u32! sec 0) (wbuf-byte! sec #x00) (wbuf-u32! sec 1)
+                  (wbuf-byte! sec IDECL-EXPORT)
+                  (wbuf-byte! sec #x00) (wbuf-name! sec "get-stderr")
+                  (wbuf-byte! sec CEXT-FUNC) (wbuf-u32! sec 2)
+                  (wbuf-section! out CSEC-TYPE sec)
+                  (set! inst-stderr next-inst)
+                  (set! next-inst (+ next-inst 1))
+                  (wbuf-reset! sec) (wbuf-u32! sec 1)
+                  (wbuf-byte! sec #x00) (wbuf-name! sec "wasi:cli/stderr@0.2.0")
+                  (wbuf-byte! sec CEXT-INSTANCE) (wbuf-u32! sec ty-stderr-inst)
+                  (wbuf-section! out CSEC-IMPORT sec))
+
+                ;; file-io: input-stream alias, stdin, filesystem/types, preopens
+                (when needs-file-io
+                  ;; Alias: input-stream type from streams instance
+                  (set! ty-input-stream next-type)
+                  (set! next-type (+ next-type 1))
+                  (wbuf-reset! sec) (wbuf-u32! sec 1)
+                  (wbuf-byte! sec CEXT-TYPE) (wbuf-byte! sec ALIAS-EXPORT)
+                  (wbuf-u32! sec inst-streams) (wbuf-name! sec "input-stream")
+                  (wbuf-section! out CSEC-ALIAS sec)
+
+                  ;; wasi:cli/stdin
+                  (let ((ty-stdin-inst next-type))
+                    (set! next-type (+ next-type 1))
+                    (wbuf-reset! sec) (wbuf-u32! sec 1)
+                    (wbuf-byte! sec CT-INSTANCE) (wbuf-u32! sec 4)
+                    (wbuf-byte! sec IDECL-ALIAS) (wbuf-byte! sec CEXT-TYPE)
+                    (wbuf-byte! sec ALIAS-OUTER) (wbuf-u32! sec 1) (wbuf-u32! sec ty-input-stream)
+                    (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-OWN) (wbuf-u32! sec 0)
+                    (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CT-FUNC)
+                    (wbuf-u32! sec 0) (wbuf-byte! sec #x00) (wbuf-u32! sec 1)
+                    (wbuf-byte! sec IDECL-EXPORT)
+                    (wbuf-byte! sec #x00) (wbuf-name! sec "get-stdin")
+                    (wbuf-byte! sec CEXT-FUNC) (wbuf-u32! sec 2)
+                    (wbuf-section! out CSEC-TYPE sec)
+                    (set! inst-stdin next-inst)
+                    (set! next-inst (+ next-inst 1))
+                    (wbuf-reset! sec) (wbuf-u32! sec 1)
+                    (wbuf-byte! sec #x00) (wbuf-name! sec "wasi:cli/stdin@0.2.0")
+                    (wbuf-byte! sec CEXT-INSTANCE) (wbuf-u32! sec ty-stdin-inst)
+                    (wbuf-section! out CSEC-IMPORT sec))
+
+                  ;; wasi:filesystem/types — 24 declarations
+                  (let ((ty-fs-inst next-type))
+                    (set! next-type (+ next-type 1))
+                    (wbuf-reset! sec) (wbuf-u32! sec 1)
+                    (wbuf-byte! sec CT-INSTANCE) (wbuf-u32! sec 24)
+                    ;; local 0: alias input-stream from outer
+                    (wbuf-byte! sec IDECL-ALIAS) (wbuf-byte! sec CEXT-TYPE)
+                    (wbuf-byte! sec ALIAS-OUTER) (wbuf-u32! sec 1) (wbuf-u32! sec ty-input-stream)
+                    ;; local 1: alias output-stream from outer
+                    (wbuf-byte! sec IDECL-ALIAS) (wbuf-byte! sec CEXT-TYPE)
+                    (wbuf-byte! sec ALIAS-OUTER) (wbuf-u32! sec 1) (wbuf-u32! sec ty-output-stream)
+                    ;; local 2: export "descriptor" as resource
+                    (wbuf-byte! sec IDECL-EXPORT)
+                    (wbuf-byte! sec #x00) (wbuf-name! sec "descriptor")
+                    (wbuf-byte! sec CEXT-TYPE) (wbuf-byte! sec #x01)
+                    ;; local 3: borrow<descriptor(2)>
+                    (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-BORROW) (wbuf-u32! sec 2)
+                    ;; local 4: own<descriptor(2)>
+                    (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-OWN) (wbuf-u32! sec 2)
+                    ;; local 5: path-flags = flags(1)
+                    (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-FLAGS) (wbuf-u32! sec 1)
+                    (wbuf-name! sec "symlink-follow")
+                    ;; local 6: export "path-flags" eq(5)
+                    (wbuf-byte! sec IDECL-EXPORT)
+                    (wbuf-byte! sec #x00) (wbuf-name! sec "path-flags")
+                    (wbuf-byte! sec CEXT-TYPE) (wbuf-byte! sec #x00) (wbuf-u32! sec 5)
+                    ;; local 7: open-flags = flags(4)
+                    (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-FLAGS) (wbuf-u32! sec 4)
+                    (wbuf-name! sec "create") (wbuf-name! sec "directory")
+                    (wbuf-name! sec "exclusive") (wbuf-name! sec "truncate")
+                    ;; local 8: export "open-flags" eq(7)
+                    (wbuf-byte! sec IDECL-EXPORT)
+                    (wbuf-byte! sec #x00) (wbuf-name! sec "open-flags")
+                    (wbuf-byte! sec CEXT-TYPE) (wbuf-byte! sec #x00) (wbuf-u32! sec 7)
+                    ;; local 9: descriptor-flags = flags(6)
+                    (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-FLAGS) (wbuf-u32! sec 6)
+                    (wbuf-name! sec "read") (wbuf-name! sec "write")
+                    (wbuf-name! sec "file-integrity-sync") (wbuf-name! sec "data-integrity-sync")
+                    (wbuf-name! sec "requested-write-sync") (wbuf-name! sec "mutate-directory")
+                    ;; local 10: export "descriptor-flags" eq(9)
+                    (wbuf-byte! sec IDECL-EXPORT)
+                    (wbuf-byte! sec #x00) (wbuf-name! sec "descriptor-flags")
+                    (wbuf-byte! sec CEXT-TYPE) (wbuf-byte! sec #x00) (wbuf-u32! sec 9)
+                    ;; local 11: error-code = enum(37)
+                    (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-ENUM) (wbuf-u32! sec 37)
+                    (wbuf-name! sec "access") (wbuf-name! sec "would-block")
+                    (wbuf-name! sec "already") (wbuf-name! sec "bad-descriptor")
+                    (wbuf-name! sec "busy") (wbuf-name! sec "deadlock")
+                    (wbuf-name! sec "quota") (wbuf-name! sec "exist")
+                    (wbuf-name! sec "file-too-large") (wbuf-name! sec "illegal-byte-sequence")
+                    (wbuf-name! sec "in-progress") (wbuf-name! sec "interrupted")
+                    (wbuf-name! sec "invalid") (wbuf-name! sec "io")
+                    (wbuf-name! sec "is-directory") (wbuf-name! sec "loop")
+                    (wbuf-name! sec "too-many-links") (wbuf-name! sec "message-size")
+                    (wbuf-name! sec "name-too-long") (wbuf-name! sec "no-device")
+                    (wbuf-name! sec "no-entry") (wbuf-name! sec "no-lock")
+                    (wbuf-name! sec "insufficient-memory") (wbuf-name! sec "insufficient-space")
+                    (wbuf-name! sec "not-directory") (wbuf-name! sec "not-empty")
+                    (wbuf-name! sec "not-recoverable") (wbuf-name! sec "unsupported")
+                    (wbuf-name! sec "no-tty") (wbuf-name! sec "no-such-device")
+                    (wbuf-name! sec "overflow") (wbuf-name! sec "not-permitted")
+                    (wbuf-name! sec "pipe") (wbuf-name! sec "read-only")
+                    (wbuf-name! sec "invalid-seek") (wbuf-name! sec "text-file-busy")
+                    (wbuf-name! sec "cross-device")
+                    ;; local 12: export "error-code" eq(11)
+                    (wbuf-byte! sec IDECL-EXPORT)
+                    (wbuf-byte! sec #x00) (wbuf-name! sec "error-code")
+                    (wbuf-byte! sec CEXT-TYPE) (wbuf-byte! sec #x00) (wbuf-u32! sec 11)
+                    ;; local 13: result<own<desc>(4), error-code(12)>
+                    (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-RESULT)
+                    (wbuf-byte! sec #x01) (wbuf-u32! sec 4) (wbuf-byte! sec #x01) (wbuf-u32! sec 12)
+                    ;; local 14: functype open-at(5 params) -> result(13)
+                    (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CT-FUNC)
+                    (wbuf-u32! sec 5)
+                    (wbuf-name! sec "self") (wbuf-u32! sec 3)
+                    (wbuf-name! sec "path-flags") (wbuf-u32! sec 6)
+                    (wbuf-name! sec "path") (wbuf-byte! sec CVT-STRING)
+                    (wbuf-name! sec "open-flags") (wbuf-u32! sec 8)
+                    (wbuf-name! sec "flags") (wbuf-u32! sec 10)
+                    (wbuf-byte! sec #x00) (wbuf-u32! sec 13)
+                    ;; export "[method]descriptor.open-at"
+                    (wbuf-byte! sec IDECL-EXPORT)
+                    (wbuf-byte! sec #x00) (wbuf-name! sec "[method]descriptor.open-at")
+                    (wbuf-byte! sec CEXT-FUNC) (wbuf-u32! sec 14)
+                    ;; local 15: own<input-stream(0)>
+                    (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-OWN) (wbuf-u32! sec 0)
+                    ;; local 16: result<own<is>(15), error-code(12)>
+                    (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-RESULT)
+                    (wbuf-byte! sec #x01) (wbuf-u32! sec 15) (wbuf-byte! sec #x01) (wbuf-u32! sec 12)
+                    ;; local 17: functype read-via-stream(self, offset) -> result(16)
+                    (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CT-FUNC)
+                    (wbuf-u32! sec 2)
+                    (wbuf-name! sec "self") (wbuf-u32! sec 3)
+                    (wbuf-name! sec "offset") (wbuf-byte! sec CVT-U64)
+                    (wbuf-byte! sec #x00) (wbuf-u32! sec 16)
+                    ;; export "[method]descriptor.read-via-stream"
+                    (wbuf-byte! sec IDECL-EXPORT)
+                    (wbuf-byte! sec #x00) (wbuf-name! sec "[method]descriptor.read-via-stream")
+                    (wbuf-byte! sec CEXT-FUNC) (wbuf-u32! sec 17)
+                    ;; local 18: own<output-stream(1)>
+                    (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-OWN) (wbuf-u32! sec 1)
+                    ;; local 19: result<own<os>(18), error-code(12)>
+                    (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-RESULT)
+                    (wbuf-byte! sec #x01) (wbuf-u32! sec 18) (wbuf-byte! sec #x01) (wbuf-u32! sec 12)
+                    ;; local 20: functype write-via-stream(self, offset) -> result(19)
+                    (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CT-FUNC)
+                    (wbuf-u32! sec 2)
+                    (wbuf-name! sec "self") (wbuf-u32! sec 3)
+                    (wbuf-name! sec "offset") (wbuf-byte! sec CVT-U64)
+                    (wbuf-byte! sec #x00) (wbuf-u32! sec 19)
+                    ;; export "[method]descriptor.write-via-stream"
+                    (wbuf-byte! sec IDECL-EXPORT)
+                    (wbuf-byte! sec #x00) (wbuf-name! sec "[method]descriptor.write-via-stream")
+                    (wbuf-byte! sec CEXT-FUNC) (wbuf-u32! sec 20)
+                    (wbuf-section! out CSEC-TYPE sec)
+                    (set! inst-filesystem next-inst)
+                    (set! next-inst (+ next-inst 1))
+                    (wbuf-reset! sec) (wbuf-u32! sec 1)
+                    (wbuf-byte! sec #x00) (wbuf-name! sec "wasi:filesystem/types@0.2.0")
+                    (wbuf-byte! sec CEXT-INSTANCE) (wbuf-u32! sec ty-fs-inst)
+                    (wbuf-section! out CSEC-IMPORT sec))
+
+                  ;; Alias: descriptor type from filesystem instance
+                  (set! ty-descriptor next-type)
+                  (set! next-type (+ next-type 1))
+                  (wbuf-reset! sec) (wbuf-u32! sec 1)
+                  (wbuf-byte! sec CEXT-TYPE) (wbuf-byte! sec ALIAS-EXPORT)
+                  (wbuf-u32! sec inst-filesystem) (wbuf-name! sec "descriptor")
+                  (wbuf-section! out CSEC-ALIAS sec)
+
+                  ;; wasi:filesystem/preopens — 6 declarations
+                  (let ((ty-preopens-inst next-type))
+                    (set! next-type (+ next-type 1))
+                    (wbuf-reset! sec) (wbuf-u32! sec 1)
+                    (wbuf-byte! sec CT-INSTANCE) (wbuf-u32! sec 6)
+                    ;; local 0: alias descriptor from outer
+                    (wbuf-byte! sec IDECL-ALIAS) (wbuf-byte! sec CEXT-TYPE)
+                    (wbuf-byte! sec ALIAS-OUTER) (wbuf-u32! sec 1) (wbuf-u32! sec ty-descriptor)
+                    ;; local 1: own<descriptor(0)>
+                    (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-OWN) (wbuf-u32! sec 0)
+                    ;; local 2: tuple<own<desc>(1), string>
+                    (wbuf-byte! sec IDECL-TYPE)
+                    (wbuf-byte! sec CVT-TUPLE) (wbuf-u32! sec 2)
+                    (wbuf-u32! sec 1) (wbuf-byte! sec CVT-STRING)
+                    ;; local 3: list<tuple(2)>
+                    (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-LIST) (wbuf-u32! sec 2)
+                    ;; local 4: functype get-directories() -> list(3)
+                    (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CT-FUNC)
+                    (wbuf-u32! sec 0) (wbuf-byte! sec #x00) (wbuf-u32! sec 3)
+                    ;; export "get-directories"
+                    (wbuf-byte! sec IDECL-EXPORT)
+                    (wbuf-byte! sec #x00) (wbuf-name! sec "get-directories")
+                    (wbuf-byte! sec CEXT-FUNC) (wbuf-u32! sec 4)
+                    (wbuf-section! out CSEC-TYPE sec)
+                    (set! inst-preopens next-inst)
+                    (set! next-inst (+ next-inst 1))
+                    (wbuf-reset! sec) (wbuf-u32! sec 1)
+                    (wbuf-byte! sec #x00) (wbuf-name! sec "wasi:filesystem/preopens@0.2.0")
+                    (wbuf-byte! sec CEXT-INSTANCE) (wbuf-u32! sec ty-preopens-inst)
+                    (wbuf-section! out CSEC-IMPORT sec))))))))
+
+      ;; wasi:clocks/monotonic-clock
+      (when needs-clock
+        (let ((ty-clock-inst next-type))
+          (set! next-type (+ next-type 1))
+          (wbuf-reset! sec)
+          (wbuf-u32! sec 1)
+          ;; instance type with 4 declarations (all types defined inside)
+          (wbuf-byte! sec CT-INSTANCE) (wbuf-u32! sec 4)
+          ;; local type 0: instant = u64
+          (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-U64)
+          ;; export "instant" as Type(Eq(0)) → local type 1
+          (wbuf-byte! sec IDECL-EXPORT)
+          (wbuf-byte! sec #x00) (wbuf-name! sec "instant")
+          (wbuf-byte! sec CEXT-TYPE) (wbuf-byte! sec #x00) (wbuf-u32! sec 0)
+          ;; local type 2: functype now() -> type 1 (exported instant)
+          (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CT-FUNC) (wbuf-u32! sec 0)
+          (wbuf-byte! sec #x00) (wbuf-u32! sec 1)
+          ;; export "now" as Func(2)
+          (wbuf-byte! sec IDECL-EXPORT)
+          (wbuf-byte! sec #x00) (wbuf-name! sec "now")
+          (wbuf-byte! sec CEXT-FUNC) (wbuf-u32! sec 2)
+          (wbuf-section! out CSEC-TYPE sec)
+          (set! inst-clock next-inst)
+          (set! next-inst (+ next-inst 1))
+          (wbuf-reset! sec) (wbuf-u32! sec 1)
+          (wbuf-byte! sec #x00) (wbuf-name! sec "wasi:clocks/monotonic-clock@0.2.0")
+          (wbuf-byte! sec CEXT-INSTANCE) (wbuf-u32! sec ty-clock-inst)
+          (wbuf-section! out CSEC-IMPORT sec)))
+
+      ;; wasi:cli/environment (shared instance for get-arguments and/or get-environment)
+      (when (or needs-command-line needs-get-env)
+        (let ((ty-env-inst next-type)
+              (ndecls (+ (if needs-command-line 3 0) (if needs-get-env 4 0)))
+              (local-tidx 0)
+              (env-fn-args-idx -1)
+              (env-fn-env-idx -1))
+          (set! next-type (+ next-type 1))
+          (wbuf-reset! sec)
+          (wbuf-u32! sec 1)
+          (wbuf-byte! sec CT-INSTANCE) (wbuf-u32! sec ndecls)
+          ;; get-arguments types
+          (when needs-command-line
+            ;; type [local-tidx]: list<string>
+            (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-LIST) (wbuf-byte! sec CVT-STRING)
+            (let ((ty-list-string local-tidx))
+              (set! local-tidx (+ local-tidx 1))
+              ;; type [local-tidx]: functype get-arguments() -> ty-list-string
+              (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CT-FUNC)
+              (wbuf-u32! sec 0) (wbuf-byte! sec #x00) (wbuf-u32! sec ty-list-string)
+              (set! env-fn-args-idx local-tidx)
+              (set! local-tidx (+ local-tidx 1))))
+          ;; get-environment types
+          (when needs-get-env
+            ;; type [local-tidx]: tuple<string, string>
+            (wbuf-byte! sec IDECL-TYPE)
+            (wbuf-byte! sec CVT-TUPLE) (wbuf-u32! sec 2)
+            (wbuf-byte! sec CVT-STRING) (wbuf-byte! sec CVT-STRING)
+            (let ((ty-tuple local-tidx))
+              (set! local-tidx (+ local-tidx 1))
+              ;; type [local-tidx]: list<tuple<string, string>>
+              (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CVT-LIST) (wbuf-u32! sec ty-tuple)
+              (let ((ty-list-tuple local-tidx))
+                (set! local-tidx (+ local-tidx 1))
+                ;; type [local-tidx]: functype get-environment() -> ty-list-tuple
+                (wbuf-byte! sec IDECL-TYPE) (wbuf-byte! sec CT-FUNC)
+                (wbuf-u32! sec 0) (wbuf-byte! sec #x00) (wbuf-u32! sec ty-list-tuple)
+                (set! env-fn-env-idx local-tidx)
+                (set! local-tidx (+ local-tidx 1)))))
+          ;; exports
+          (when needs-command-line
+            (wbuf-byte! sec IDECL-EXPORT)
+            (wbuf-byte! sec #x00) (wbuf-name! sec "get-arguments")
+            (wbuf-byte! sec CEXT-FUNC) (wbuf-u32! sec env-fn-args-idx))
+          (when needs-get-env
+            (wbuf-byte! sec IDECL-EXPORT)
+            (wbuf-byte! sec #x00) (wbuf-name! sec "get-environment")
+            (wbuf-byte! sec CEXT-FUNC) (wbuf-u32! sec env-fn-env-idx))
+          (wbuf-section! out CSEC-TYPE sec)
+          (set! inst-environment next-inst)
+          (set! next-inst (+ next-inst 1))
+          (wbuf-reset! sec) (wbuf-u32! sec 1)
+          (wbuf-byte! sec #x00) (wbuf-name! sec "wasi:cli/environment@0.2.0")
+          (wbuf-byte! sec CEXT-INSTANCE) (wbuf-u32! sec ty-env-inst)
+          (wbuf-section! out CSEC-IMPORT sec)))
+
+      ;; ===== Function aliases from instances =====
+      (let ((func-exit -1)
+            (func-write -1)
+            (func-get-stdout -1)
+            (func-get-stderr -1)
+            (func-clock-now -1)
+            (func-get-arguments -1)
+            (func-get-environment -1)
+            (func-get-stdin -1)
+            (func-blocking-read -1)
+            (func-get-directories -1)
+            (func-open-at -1)
+            (func-read-via-stream -1)
+            (func-write-via-stream -1))
+        (let ((alias-count (+ (if needs-exit 1 0) (if needs-io 3 0) (if needs-clock 1 0)
+                              (if needs-command-line 1 0) (if needs-get-env 1 0)
+                              (if needs-file-io 6 0))))
+          (when (> alias-count 0)
+            (wbuf-reset! sec)
+            (wbuf-u32! sec alias-count)
+            (when needs-exit
+              (set! func-exit next-func)
+              (set! next-func (+ next-func 1))
+              (wbuf-byte! sec CEXT-FUNC) (wbuf-byte! sec ALIAS-EXPORT)
+              (wbuf-u32! sec inst-exit) (wbuf-name! sec "exit"))
+            (when needs-io
+              (set! func-write next-func)
+              (set! next-func (+ next-func 1))
+              (wbuf-byte! sec CEXT-FUNC) (wbuf-byte! sec ALIAS-EXPORT)
+              (wbuf-u32! sec inst-streams) (wbuf-name! sec "[method]output-stream.blocking-write-and-flush")
+              (set! func-get-stdout next-func)
+              (set! next-func (+ next-func 1))
+              (wbuf-byte! sec CEXT-FUNC) (wbuf-byte! sec ALIAS-EXPORT)
+              (wbuf-u32! sec inst-stdout) (wbuf-name! sec "get-stdout")
+              (set! func-get-stderr next-func)
+              (set! next-func (+ next-func 1))
+              (wbuf-byte! sec CEXT-FUNC) (wbuf-byte! sec ALIAS-EXPORT)
+              (wbuf-u32! sec inst-stderr) (wbuf-name! sec "get-stderr"))
+            (when needs-clock
+              (set! func-clock-now next-func)
+              (set! next-func (+ next-func 1))
+              (wbuf-byte! sec CEXT-FUNC) (wbuf-byte! sec ALIAS-EXPORT)
+              (wbuf-u32! sec inst-clock) (wbuf-name! sec "now"))
+            (when needs-command-line
+              (set! func-get-arguments next-func)
+              (set! next-func (+ next-func 1))
+              (wbuf-byte! sec CEXT-FUNC) (wbuf-byte! sec ALIAS-EXPORT)
+              (wbuf-u32! sec inst-environment) (wbuf-name! sec "get-arguments"))
+            (when needs-get-env
+              (set! func-get-environment next-func)
+              (set! next-func (+ next-func 1))
+              (wbuf-byte! sec CEXT-FUNC) (wbuf-byte! sec ALIAS-EXPORT)
+              (wbuf-u32! sec inst-environment) (wbuf-name! sec "get-environment"))
+            (when needs-file-io
+              (set! func-get-stdin next-func)
+              (set! next-func (+ next-func 1))
+              (wbuf-byte! sec CEXT-FUNC) (wbuf-byte! sec ALIAS-EXPORT)
+              (wbuf-u32! sec inst-stdin) (wbuf-name! sec "get-stdin")
+              (set! func-blocking-read next-func)
+              (set! next-func (+ next-func 1))
+              (wbuf-byte! sec CEXT-FUNC) (wbuf-byte! sec ALIAS-EXPORT)
+              (wbuf-u32! sec inst-streams) (wbuf-name! sec "[method]input-stream.blocking-read")
+              (set! func-get-directories next-func)
+              (set! next-func (+ next-func 1))
+              (wbuf-byte! sec CEXT-FUNC) (wbuf-byte! sec ALIAS-EXPORT)
+              (wbuf-u32! sec inst-preopens) (wbuf-name! sec "get-directories")
+              (set! func-open-at next-func)
+              (set! next-func (+ next-func 1))
+              (wbuf-byte! sec CEXT-FUNC) (wbuf-byte! sec ALIAS-EXPORT)
+              (wbuf-u32! sec inst-filesystem) (wbuf-name! sec "[method]descriptor.open-at")
+              (set! func-read-via-stream next-func)
+              (set! next-func (+ next-func 1))
+              (wbuf-byte! sec CEXT-FUNC) (wbuf-byte! sec ALIAS-EXPORT)
+              (wbuf-u32! sec inst-filesystem) (wbuf-name! sec "[method]descriptor.read-via-stream")
+              (set! func-write-via-stream next-func)
+              (set! next-func (+ next-func 1))
+              (wbuf-byte! sec CEXT-FUNC) (wbuf-byte! sec ALIAS-EXPORT)
+              (wbuf-u32! sec inst-filesystem) (wbuf-name! sec "[method]descriptor.write-via-stream"))
+            (wbuf-section! out CSEC-ALIAS sec)))
+
+        ;; ===== Memory module (core module 0) =====
+        (wbuf-reset! sec)
+        (wbuf-bytes! sec mem-mod-bytes 0 (bytevector-length mem-mod-bytes))
+        (wbuf-section! out CSEC-CORE-MODULE sec)
+
+        ;; Core instance 0: instantiate mem-mod
+        (wbuf-reset! sec) (wbuf-u32! sec 1)
+        (wbuf-byte! sec #x00) (wbuf-u32! sec 0) (wbuf-u32! sec 0)
+        (wbuf-section! out CSEC-CORE-INSTANCE sec)
+
+        ;; Alias: core memory 0 + core func 0 (cabi_realloc) from core instance 0
+        (wbuf-reset! sec) (wbuf-u32! sec 2)
+        (wbuf-byte! sec #x00) (wbuf-byte! sec CSORT-MEMORY)
+        (wbuf-byte! sec ALIAS-CORE-EXPORT) (wbuf-u32! sec 0) (wbuf-name! sec "memory")
+        (wbuf-byte! sec #x00) (wbuf-byte! sec CSORT-FUNC)
+        (wbuf-byte! sec ALIAS-CORE-EXPORT) (wbuf-u32! sec 0) (wbuf-name! sec "cabi_realloc")
+        (wbuf-section! out CSEC-ALIAS sec)
+        (set! next-core-func 1)
+
+        ;; ===== Canon lower + resource.drop =====
+        (let ((cf-exit -1)
+              (cf-get-stdout -1)
+              (cf-get-stderr -1)
+              (cf-write -1)
+              (cf-clock-now -1)
+              (cf-get-arguments -1)
+              (cf-get-environment -1)
+              (cf-get-stdin -1)
+              (cf-blocking-read -1)
+              (cf-get-directories -1)
+              (cf-open-at -1)
+              (cf-read-via-stream -1)
+              (cf-write-via-stream -1)
+              (cf-drop-descriptor -1)
+              (cf-drop-input-stream -1)
+              (cf-drop-output-stream -1))
+          (let ((canon-count (+ (if needs-exit 1 0) (if needs-io 3 0) (if needs-clock 1 0)
+                                (if needs-command-line 1 0) (if needs-get-env 1 0)
+                                (if needs-file-io 9 0))))
+            (when (> canon-count 0)
+              (wbuf-reset! sec) (wbuf-u32! sec canon-count)
+              (when needs-exit
+                (set! cf-exit next-core-func)
+                (set! next-core-func (+ next-core-func 1))
+                (wbuf-byte! sec CANON-LOWER) (wbuf-byte! sec #x00)
+                (wbuf-u32! sec func-exit) (wbuf-u32! sec 0))
+              (when needs-io
+                (set! cf-get-stdout next-core-func)
+                (set! next-core-func (+ next-core-func 1))
+                (wbuf-byte! sec CANON-LOWER) (wbuf-byte! sec #x00)
+                (wbuf-u32! sec func-get-stdout) (wbuf-u32! sec 0)
+                (set! cf-get-stderr next-core-func)
+                (set! next-core-func (+ next-core-func 1))
+                (wbuf-byte! sec CANON-LOWER) (wbuf-byte! sec #x00)
+                (wbuf-u32! sec func-get-stderr) (wbuf-u32! sec 0)
+                (set! cf-write next-core-func)
+                (set! next-core-func (+ next-core-func 1))
+                (wbuf-byte! sec CANON-LOWER) (wbuf-byte! sec #x00)
+                (wbuf-u32! sec func-write) (wbuf-u32! sec 2)
+                (wbuf-byte! sec CANONOPT-MEMORY) (wbuf-u32! sec 0)
+                (wbuf-byte! sec CANONOPT-REALLOC) (wbuf-u32! sec 0))
+              (when needs-clock
+                (set! cf-clock-now next-core-func)
+                (set! next-core-func (+ next-core-func 1))
+                (wbuf-byte! sec CANON-LOWER) (wbuf-byte! sec #x00)
+                (wbuf-u32! sec func-clock-now) (wbuf-u32! sec 0))
+              (when needs-command-line
+                (set! cf-get-arguments next-core-func)
+                (set! next-core-func (+ next-core-func 1))
+                (wbuf-byte! sec CANON-LOWER) (wbuf-byte! sec #x00)
+                (wbuf-u32! sec func-get-arguments) (wbuf-u32! sec 3)
+                (wbuf-byte! sec CANONOPT-MEMORY) (wbuf-u32! sec 0)
+                (wbuf-byte! sec CANONOPT-REALLOC) (wbuf-u32! sec 0)
+                (wbuf-byte! sec CANONOPT-UTF8))
+              (when needs-get-env
+                (set! cf-get-environment next-core-func)
+                (set! next-core-func (+ next-core-func 1))
+                (wbuf-byte! sec CANON-LOWER) (wbuf-byte! sec #x00)
+                (wbuf-u32! sec func-get-environment) (wbuf-u32! sec 3)
+                (wbuf-byte! sec CANONOPT-MEMORY) (wbuf-u32! sec 0)
+                (wbuf-byte! sec CANONOPT-REALLOC) (wbuf-u32! sec 0)
+                (wbuf-byte! sec CANONOPT-UTF8))
+              (when needs-file-io
+                ;; canon lower: get-stdin () -> i32
+                (set! cf-get-stdin next-core-func)
+                (set! next-core-func (+ next-core-func 1))
+                (wbuf-byte! sec CANON-LOWER) (wbuf-byte! sec #x00)
+                (wbuf-u32! sec func-get-stdin) (wbuf-u32! sec 0)
+                ;; canon lower: blocking-read (needs memory+realloc for list<u8>)
+                (set! cf-blocking-read next-core-func)
+                (set! next-core-func (+ next-core-func 1))
+                (wbuf-byte! sec CANON-LOWER) (wbuf-byte! sec #x00)
+                (wbuf-u32! sec func-blocking-read) (wbuf-u32! sec 2)
+                (wbuf-byte! sec CANONOPT-MEMORY) (wbuf-u32! sec 0)
+                (wbuf-byte! sec CANONOPT-REALLOC) (wbuf-u32! sec 0)
+                ;; canon lower: get-directories (memory+realloc+utf8)
+                (set! cf-get-directories next-core-func)
+                (set! next-core-func (+ next-core-func 1))
+                (wbuf-byte! sec CANON-LOWER) (wbuf-byte! sec #x00)
+                (wbuf-u32! sec func-get-directories) (wbuf-u32! sec 3)
+                (wbuf-byte! sec CANONOPT-MEMORY) (wbuf-u32! sec 0)
+                (wbuf-byte! sec CANONOPT-REALLOC) (wbuf-u32! sec 0)
+                (wbuf-byte! sec CANONOPT-UTF8)
+                ;; canon lower: open-at (memory+realloc+utf8 for string param)
+                (set! cf-open-at next-core-func)
+                (set! next-core-func (+ next-core-func 1))
+                (wbuf-byte! sec CANON-LOWER) (wbuf-byte! sec #x00)
+                (wbuf-u32! sec func-open-at) (wbuf-u32! sec 3)
+                (wbuf-byte! sec CANONOPT-MEMORY) (wbuf-u32! sec 0)
+                (wbuf-byte! sec CANONOPT-REALLOC) (wbuf-u32! sec 0)
+                (wbuf-byte! sec CANONOPT-UTF8)
+                ;; canon lower: read-via-stream (memory+realloc)
+                (set! cf-read-via-stream next-core-func)
+                (set! next-core-func (+ next-core-func 1))
+                (wbuf-byte! sec CANON-LOWER) (wbuf-byte! sec #x00)
+                (wbuf-u32! sec func-read-via-stream) (wbuf-u32! sec 2)
+                (wbuf-byte! sec CANONOPT-MEMORY) (wbuf-u32! sec 0)
+                (wbuf-byte! sec CANONOPT-REALLOC) (wbuf-u32! sec 0)
+                ;; canon lower: write-via-stream (memory+realloc)
+                (set! cf-write-via-stream next-core-func)
+                (set! next-core-func (+ next-core-func 1))
+                (wbuf-byte! sec CANON-LOWER) (wbuf-byte! sec #x00)
+                (wbuf-u32! sec func-write-via-stream) (wbuf-u32! sec 2)
+                (wbuf-byte! sec CANONOPT-MEMORY) (wbuf-u32! sec 0)
+                (wbuf-byte! sec CANONOPT-REALLOC) (wbuf-u32! sec 0)
+                ;; canon resource.drop: descriptor
+                (set! cf-drop-descriptor next-core-func)
+                (set! next-core-func (+ next-core-func 1))
+                (wbuf-byte! sec CANON-RESOURCE-DROP) (wbuf-u32! sec ty-descriptor)
+                ;; canon resource.drop: input-stream
+                (set! cf-drop-input-stream next-core-func)
+                (set! next-core-func (+ next-core-func 1))
+                (wbuf-byte! sec CANON-RESOURCE-DROP) (wbuf-u32! sec ty-input-stream)
+                ;; canon resource.drop: output-stream
+                (set! cf-drop-output-stream next-core-func)
+                (set! next-core-func (+ next-core-func 1))
+                (wbuf-byte! sec CANON-RESOURCE-DROP) (wbuf-u32! sec ty-output-stream))
+              (wbuf-section! out CSEC-CANON sec)))
+
+          ;; ===== User core module (core module 1) =====
+          (wbuf-reset! sec)
+          (wbuf-bytes! sec core-module-bytes 0 (bytevector-length core-module-bytes))
+          (wbuf-section! out CSEC-CORE-MODULE sec)
+
+          ;; ===== Core instances =====
+          (let* ((has-env (or needs-exit needs-io needs-clock needs-command-line needs-get-env needs-file-io))
+                 (env-count (+ (if needs-exit 1 0) (if needs-io 3 0) (if needs-clock 1 0)
+                               (if needs-command-line 1 0) (if needs-get-env 1 0)
+                               (if needs-file-io 9 0)))
+                 (num-insts (+ 2 (if has-env 1 0)))
+                 (core-mod-inst (+ 2 (if has-env 1 0))))
+            (wbuf-reset! sec) (wbuf-u32! sec num-insts)
+            ;; mem-exp: inline export of memory
+            (wbuf-byte! sec #x01) (wbuf-u32! sec 1)
+            (wbuf-name! sec "memory") (wbuf-byte! sec CSORT-MEMORY) (wbuf-u32! sec 0)
+            ;; env: inline export of lowered functions
+            (when has-env
+              (wbuf-byte! sec #x01) (wbuf-u32! sec env-count)
+              (when needs-exit
+                (wbuf-name! sec "exit") (wbuf-byte! sec CSORT-FUNC) (wbuf-u32! sec cf-exit))
+              (when needs-io
+                (wbuf-name! sec "get-stdout") (wbuf-byte! sec CSORT-FUNC) (wbuf-u32! sec cf-get-stdout)
+                (wbuf-name! sec "get-stderr") (wbuf-byte! sec CSORT-FUNC) (wbuf-u32! sec cf-get-stderr)
+                (wbuf-name! sec "stream-write") (wbuf-byte! sec CSORT-FUNC) (wbuf-u32! sec cf-write))
+              (when needs-clock
+                (wbuf-name! sec "clock-now") (wbuf-byte! sec CSORT-FUNC) (wbuf-u32! sec cf-clock-now))
+              (when needs-command-line
+                (wbuf-name! sec "get-arguments") (wbuf-byte! sec CSORT-FUNC) (wbuf-u32! sec cf-get-arguments))
+              (when needs-get-env
+                (wbuf-name! sec "get-environment") (wbuf-byte! sec CSORT-FUNC) (wbuf-u32! sec cf-get-environment))
+              (when needs-file-io
+                (wbuf-name! sec "get-stdin") (wbuf-byte! sec CSORT-FUNC) (wbuf-u32! sec cf-get-stdin)
+                (wbuf-name! sec "stream-read") (wbuf-byte! sec CSORT-FUNC) (wbuf-u32! sec cf-blocking-read)
+                (wbuf-name! sec "get-directories") (wbuf-byte! sec CSORT-FUNC) (wbuf-u32! sec cf-get-directories)
+                (wbuf-name! sec "open-at") (wbuf-byte! sec CSORT-FUNC) (wbuf-u32! sec cf-open-at)
+                (wbuf-name! sec "read-via-stream") (wbuf-byte! sec CSORT-FUNC) (wbuf-u32! sec cf-read-via-stream)
+                (wbuf-name! sec "write-via-stream") (wbuf-byte! sec CSORT-FUNC) (wbuf-u32! sec cf-write-via-stream)
+                (wbuf-name! sec "drop-descriptor") (wbuf-byte! sec CSORT-FUNC) (wbuf-u32! sec cf-drop-descriptor)
+                (wbuf-name! sec "drop-input-stream") (wbuf-byte! sec CSORT-FUNC) (wbuf-u32! sec cf-drop-input-stream)
+                (wbuf-name! sec "drop-output-stream") (wbuf-byte! sec CSORT-FUNC) (wbuf-u32! sec cf-drop-output-stream)))
+            ;; Instantiate core module
+            (wbuf-byte! sec #x00) (wbuf-u32! sec 1)
+            (wbuf-u32! sec (if has-env 2 1))
+            (wbuf-name! sec "mem") (wbuf-byte! sec CSORT-INSTANCE) (wbuf-u32! sec 1)
+            (when has-env
+              (wbuf-name! sec "env") (wbuf-byte! sec CSORT-INSTANCE) (wbuf-u32! sec 2))
+            (wbuf-section! out CSEC-CORE-INSTANCE sec)
+
+            ;; Alias: run from core module instance
+            (let ((cf-run next-core-func))
+              (set! next-core-func (+ next-core-func 1))
+              (wbuf-reset! sec) (wbuf-u32! sec 1)
+              (wbuf-byte! sec #x00) (wbuf-byte! sec CSORT-FUNC)
+              (wbuf-byte! sec ALIAS-CORE-EXPORT) (wbuf-u32! sec core-mod-inst) (wbuf-name! sec "run")
+              (wbuf-section! out CSEC-ALIAS sec)
+
+              ;; Run type + canon lift
+              (let ((ty-run-result next-type))
+                (set! next-type (+ next-type 1))
+                (let ((ty-run-ft next-type))
+                  (set! next-type (+ next-type 1))
+                  (wbuf-reset! sec) (wbuf-u32! sec 2)
+                  (wbuf-byte! sec CVT-RESULT) (wbuf-byte! sec #x00) (wbuf-byte! sec #x00)
+                  (wbuf-byte! sec CT-FUNC) (wbuf-u32! sec 0) (wbuf-byte! sec #x00) (wbuf-u32! sec ty-run-result)
+                  (wbuf-section! out CSEC-TYPE sec)
+
+                  (let ((func-run next-func))
+                    (set! next-func (+ next-func 1))
+                    (wbuf-reset! sec) (wbuf-u32! sec 1)
+                    (wbuf-byte! sec CANON-LIFT) (wbuf-byte! sec #x00)
+                    (wbuf-u32! sec cf-run)
+                    (wbuf-u32! sec 1) (wbuf-byte! sec CANONOPT-MEMORY) (wbuf-u32! sec 0)
+                    (wbuf-u32! sec ty-run-ft)
+                    (wbuf-section! out CSEC-CANON sec)
+
+                    (let ((inst-run next-inst))
+                      (set! next-inst (+ next-inst 1))
+                      (wbuf-reset! sec) (wbuf-u32! sec 1)
+                      (wbuf-byte! sec #x01) (wbuf-u32! sec 1)
+                      (wbuf-byte! sec #x00) (wbuf-name! sec "run")
+                      (wbuf-byte! sec CEXT-FUNC) (wbuf-u32! sec func-run)
+                      (wbuf-section! out CSEC-COMPONENT-INSTANCE sec)
+
+                      (wbuf-reset! sec) (wbuf-u32! sec 1)
+                      (wbuf-byte! sec #x00) (wbuf-name! sec "wasi:cli/run@0.2.0")
+                      (wbuf-byte! sec CEXT-INSTANCE) (wbuf-u32! sec inst-run)
+                      (wbuf-byte! sec #x00)
+                      (wbuf-section! out CSEC-EXPORT sec))))))))))
+
+    (wbuf->bytevector out)))

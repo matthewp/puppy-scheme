@@ -1,0 +1,7 @@
+;; expect: 42"hello"#\a(1 2 3)(1 . 2)()
+(write 42)
+(write "hello")
+(write #\a)
+(write (cons 1 (cons 2 (cons 3 '()))))
+(write (cons 1 2))
+(write '())

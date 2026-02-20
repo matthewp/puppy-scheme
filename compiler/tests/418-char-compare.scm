@@ -1,0 +1,10 @@
+;; expect: 101101010
+(display (if (char<? #\a #\b) 1 0))
+(display (if (char<? #\b #\a) 1 0))
+(display (if (char<=? #\a #\a) 1 0))
+(display (if (char<=? #\a #\b) 1 0))
+(display (if (char<=? #\b #\a) 1 0))
+(display (if (char>? #\b #\a) 1 0))
+(display (if (char>? #\a #\b) 1 0))
+(display (if (char>=? #\a #\a) 1 0))
+(display (if (char>=? #\a #\b) 1 0))

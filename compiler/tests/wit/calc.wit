@@ -1,0 +1,6 @@
+package test:calc@1.0.0;
+
+world calculator {
+  import double: func(x: u32) -> u32;
+  export quadruple: func(x: u32) -> u32;
+}

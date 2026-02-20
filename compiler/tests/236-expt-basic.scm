@@ -1,0 +1,10 @@
+;; expect: 1024 1 27 1.414213 0.5
+(display (expt 2 10))
+(display " ")
+(display (expt 2 0))
+(display " ")
+(display (expt 3 3))
+(display " ")
+(display (expt 2.0 0.5))
+(display " ")
+(display (expt 2 -1))

@@ -1,0 +1,12 @@
+;; expect: 1 1 0 1 0 1
+(display (number? 1.5))
+(display " ")
+(display (number? 42))
+(display " ")
+(display (exact? 1.5))
+(display " ")
+(display (exact? 42))
+(display " ")
+(display (inexact? 42))
+(display " ")
+(display (inexact? 1.5))

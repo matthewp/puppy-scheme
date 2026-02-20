@@ -1,0 +1,2 @@
+;; expect: hello
+(display "hello")

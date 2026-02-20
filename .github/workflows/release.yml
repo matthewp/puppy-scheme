@@ -1,0 +1,256 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build-wasm:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: compiler
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Gambit
+        run: sudo apt-get install -y gambc
+        working-directory: .
+
+      - name: Install wasmtime
+        working-directory: .
+        run: |
+          curl https://wasmtime.dev/install.sh -sSf | bash
+          echo "$HOME/.wasmtime/bin" >> $GITHUB_PATH
+
+      - name: Build puppyc.wasm
+        run: make GSC=/usr/bin/gsc puppyc.wasm
+
+      - name: Run tests
+        run: make test
+
+      - name: Upload puppyc.wasm
+        uses: actions/upload-artifact@v4
+        with:
+          name: puppyc-wasm
+          path: compiler/puppyc.wasm
+
+  build-linux:
+    runs-on: ubuntu-latest
+    needs: build-wasm
+    defaults:
+      run:
+        working-directory: compiler
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download puppyc.wasm
+        uses: actions/download-artifact@v4
+        with:
+          name: puppyc-wasm
+          path: compiler
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cmake
+        run: sudo apt-get install -y cmake
+        working-directory: .
+
+      - name: Download wasmtime C API
+        run: |
+          curl -sL https://github.com/bytecodealliance/wasmtime/releases/download/v41.0.3/wasmtime-v41.0.3-x86_64-linux-c-api.tar.xz \
+            | tar xJ
+          rm -rf native/wasmtime
+          mv wasmtime-v41.0.3-x86_64-linux-c-api native/wasmtime
+          mkdir -p native/wasmtime/min/lib native/wasmtime/min/include/wasmtime
+
+      - name: Build minimal wasmtime
+        run: make wasmtime-min
+
+      - name: Build puppypack
+        run: make puppypack
+
+      - name: Build puppyc
+        run: make puppyc
+
+      - name: Rename artifacts
+        run: |
+          mv puppyc puppyc-linux-x86_64
+          mv puppypack puppypack-linux-x86_64
+
+      - name: Upload Linux binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-binaries
+          path: |
+            compiler/puppyc-linux-x86_64
+            compiler/puppypack-linux-x86_64
+
+  build-macos:
+    runs-on: macos-latest
+    needs: build-wasm
+    defaults:
+      run:
+        working-directory: compiler
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download puppyc.wasm
+        uses: actions/download-artifact@v4
+        with:
+          name: puppyc-wasm
+          path: compiler
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cmake
+        run: brew install cmake
+        working-directory: .
+
+      - name: Download wasmtime C API
+        run: |
+          curl -sL https://github.com/bytecodealliance/wasmtime/releases/download/v41.0.3/wasmtime-v41.0.3-aarch64-macos-c-api.tar.xz \
+            | tar xJ
+          rm -rf native/wasmtime
+          mv wasmtime-v41.0.3-aarch64-macos-c-api native/wasmtime
+          mkdir -p native/wasmtime/min/lib native/wasmtime/min/include/wasmtime
+
+      - name: Build minimal wasmtime
+        run: make wasmtime-min
+
+      - name: Build puppypack
+        run: make puppypack
+
+      - name: Build puppyc
+        run: make puppyc
+
+      - name: Rename artifacts
+        run: |
+          mv puppyc puppyc-macos-arm64
+          mv puppypack puppypack-macos-arm64
+
+      - name: Upload macOS binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-binaries
+          path: |
+            compiler/puppyc-macos-arm64
+            compiler/puppypack-macos-arm64
+
+  build-freebsd:
+    runs-on: ubuntu-latest
+    needs: build-wasm
+    defaults:
+      run:
+        working-directory: compiler
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download puppyc.wasm
+        uses: actions/download-artifact@v4
+        with:
+          name: puppyc-wasm
+          path: compiler
+
+      - name: Build on FreeBSD
+        uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          copyback: true
+          prepare: pkg install -y rust-nightly cmake python3 curl
+          run: |
+            set -e
+
+            cd compiler
+
+            # Build full wasmtime C API from source (no pre-built FreeBSD release)
+            WASMTIME_VERSION=41.0.3
+            mkdir -p /tmp/wasmtime-build
+            curl -sL https://github.com/bytecodealliance/wasmtime/archive/refs/tags/v${WASMTIME_VERSION}.tar.gz \
+              | tar xz -C /tmp/wasmtime-build
+            WASMTIME_SRC=/tmp/wasmtime-build/wasmtime-${WASMTIME_VERSION}
+
+            cd ${WASMTIME_SRC}
+            cmake -S crates/c-api -B build \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DWASMTIME_FEATURE_CRANELIFT=ON \
+              -DWASMTIME_FEATURE_GC=ON \
+              -DWASMTIME_FEATURE_GC_DRC=ON \
+              -DWASMTIME_FEATURE_WASI=ON \
+              -DWASMTIME_FEATURE_COMPONENT_MODEL=OFF \
+              -DWASMTIME_FEATURE_ASYNC=OFF \
+              -DWASMTIME_FEATURE_PARALLEL_COMPILATION=OFF \
+              -DWASMTIME_FEATURE_CACHE=OFF \
+              -DWASMTIME_FEATURE_PROFILING=OFF \
+              -DWASMTIME_FEATURE_COREDUMP=OFF \
+              -DWASMTIME_FEATURE_THREADS=OFF \
+              -DWASMTIME_FEATURE_POOLING_ALLOCATOR=OFF \
+              -DWASMTIME_FEATURE_WINCH=OFF \
+              -DWASMTIME_FEATURE_PULLEY=OFF \
+              -DWASMTIME_FEATURE_WAT=OFF \
+              -DWASMTIME_FEATURE_DISABLE_LOGGING=ON \
+              -DWASMTIME_FEATURE_DEMANGLE=OFF \
+              -DWASMTIME_FEATURE_ADDR2LINE=OFF \
+              -DWASMTIME_FEATURE_DEBUG_BUILTINS=OFF
+            CARGO_PROFILE_RELEASE_OPT_LEVEL=s \
+            CARGO_PROFILE_RELEASE_LTO=true \
+            CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
+            CARGO_PROFILE_RELEASE_STRIP=debuginfo \
+            cmake --build build
+            cd -
+
+            # Set up wasmtime dirs for the full build (with Cranelift for puppypack)
+            rm -rf native/wasmtime
+            mkdir -p native/wasmtime/lib native/wasmtime/include/wasmtime
+            cp ${WASMTIME_SRC}/build/include/*.h native/wasmtime/include/
+            cp -r ${WASMTIME_SRC}/build/include/wasmtime/*.h native/wasmtime/include/wasmtime/
+            cp ${WASMTIME_SRC}/crates/c-api/include/*.h native/wasmtime/include/
+            cp -r ${WASMTIME_SRC}/crates/c-api/include/wasmtime/*.h native/wasmtime/include/wasmtime/
+            cp ${WASMTIME_SRC}/target/*/release/libwasmtime.a native/wasmtime/lib/
+
+            # Also use as min (same build serves both purposes on FreeBSD)
+            mkdir -p native/wasmtime/min/lib native/wasmtime/min/include/wasmtime
+            cp native/wasmtime/lib/libwasmtime.a native/wasmtime/min/lib/
+            cp native/wasmtime/include/*.h native/wasmtime/min/include/
+            cp native/wasmtime/include/wasmtime/*.h native/wasmtime/min/include/wasmtime/
+
+            # Build puppypack and puppyc
+            make puppypack
+            make puppyc
+
+      - name: Rename artifacts
+        run: |
+          mv puppyc puppyc-freebsd-x86_64
+          mv puppypack puppypack-freebsd-x86_64
+
+      - name: Upload FreeBSD binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: freebsd-binaries
+          path: |
+            compiler/puppyc-freebsd-x86_64
+            compiler/puppypack-freebsd-x86_64
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-wasm, build-linux, build-macos, build-freebsd]
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            puppyc-wasm/puppyc.wasm
+            linux-binaries/puppyc-linux-x86_64
+            linux-binaries/puppypack-linux-x86_64
+            macos-binaries/puppyc-macos-arm64
+            macos-binaries/puppypack-macos-arm64
+            freebsd-binaries/puppyc-freebsd-x86_64
+            freebsd-binaries/puppypack-freebsd-x86_64

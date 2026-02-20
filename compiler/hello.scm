@@ -1,0 +1,5 @@
+(let ((args (command-line)))
+  (display "Hello, ")
+  (display (if (null? (cdr args)) "World" (cadr args)))
+  (display "!")
+  (newline))

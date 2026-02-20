@@ -1,0 +1,12 @@
+;; expect: 2.5 3.0 0.75 2.0 5.0 -1.0
+(display (+ 1 1.5))
+(display " ")
+(display (+ 1.5 1.5))
+(display " ")
+(display (* 1.5 0.5))
+(display " ")
+(display (/ 5.0 2.5))
+(display " ")
+(display (- 10 5.0))
+(display " ")
+(display (- 1.5 2.5))

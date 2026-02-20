@@ -1,0 +1,20 @@
+package test:gates@1.0.0;
+
+interface gated {
+  stable-func: func() -> string;
+
+  @since(version = 1.1.0)
+  newer-func: func(x: u32) -> u32;
+
+  @unstable(feature = experimental)
+  experimental-func: func() -> bool;
+
+  @since(version = 1.0.0)
+  @deprecated(version = 2.0.0)
+  old-func: func();
+}
+
+@since(version = 1.1.0)
+interface new-iface {
+  do-thing: func();
+}

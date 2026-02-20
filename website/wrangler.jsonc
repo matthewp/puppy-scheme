@@ -1,0 +1,11 @@
+{
+  "name": "puppy-scheme",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-02-26",
+  "assets": {
+    "directory": "./dist"
+  },
+  "routes": [
+    { "pattern": "puppy-scheme.org/*", "zone_name": "puppy-scheme.org" }
+  ]
+}

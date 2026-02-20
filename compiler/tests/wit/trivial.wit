@@ -1,0 +1,9 @@
+package test:trivial@1.0.0;
+
+interface greeter {
+  greet: func(name: string) -> string;
+}
+
+world hello {
+  export greeter;
+}

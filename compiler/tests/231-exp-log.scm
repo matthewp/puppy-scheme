@@ -1,0 +1,10 @@
+;; expect: 2.718281 1.0 1.0 0.0 0.693147
+(display (exp 1))
+(display " ")
+(display (exp 0))
+(display " ")
+(display (log (exp 1)))
+(display " ")
+(display (log 1))
+(display " ")
+(display (log 2))

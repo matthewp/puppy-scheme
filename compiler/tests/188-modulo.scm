@@ -1,0 +1,10 @@
+;; expect: 1 2 -2 -1 0
+(display (modulo 10 3))
+(display " ")
+(display (modulo -10 3))
+(display " ")
+(display (modulo 10 -3))
+(display " ")
+(display (modulo -10 -3))
+(display " ")
+(display (modulo 9 3))

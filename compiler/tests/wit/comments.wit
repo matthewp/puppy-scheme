@@ -1,0 +1,10 @@
+// This is a line comment
+package test:comments@1.0.0;
+
+/* This is a block comment */
+interface commented {
+  /* Nested /* block */ comments */
+  greet: func(name: string) -> string; // inline comment
+}
+
+// Another comment at end

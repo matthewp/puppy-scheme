@@ -1,0 +1,12 @@
+;; expect: 5 2 -2 -5 3 3
+(display (max 3 5))
+(display " ")
+(display (min 2 7))
+(display " ")
+(display (max -2 -5))
+(display " ")
+(display (min -2 -5))
+(display " ")
+(display (max 3 3))
+(display " ")
+(display (min 3 3))

@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: compiler
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Gambit
+        run: sudo apt-get install -y gambc
+        working-directory: .
+
+      - name: Install wasmtime
+        working-directory: .
+        run: |
+          curl https://wasmtime.dev/install.sh -sSf | bash
+          echo "$HOME/.wasmtime/bin" >> $GITHUB_PATH
+
+      - name: Build puppyc.wasm
+        run: make GSC=/usr/bin/gsc puppyc.wasm
+
+      - name: Run tests
+        run: make test

@@ -1,0 +1,10 @@
+;; expect: 10011101
+(display (string<? "abc" "abd"))
+(display (string<? "abd" "abc"))
+(display (string<? "abc" "abc"))
+(display (string<? "ab" "abc"))
+(display (string>? "abd" "abc"))
+(display (string<=? "abc" "abc"))
+(display (string<=? "abd" "abc"))
+(display (string>=? "abc" "abc"))
+(newline)

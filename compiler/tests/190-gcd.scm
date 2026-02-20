@@ -1,0 +1,10 @@
+;; expect: 6 1 5 7 7
+(display (gcd 12 18))
+(display " ")
+(display (gcd 7 13))
+(display " ")
+(display (gcd 15 10))
+(display " ")
+(display (gcd -7 14))
+(display " ")
+(display (gcd 0 7))

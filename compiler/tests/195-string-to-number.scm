@@ -1,0 +1,10 @@
+;; expect: 42 -7 0 0 0
+(display (string->number "42"))
+(display " ")
+(display (string->number "-7"))
+(display " ")
+(display (string->number "abc"))
+(display " ")
+(display (string->number "0"))
+(display " ")
+(display (string->number ""))

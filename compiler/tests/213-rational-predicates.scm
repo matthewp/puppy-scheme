@@ -1,0 +1,10 @@
+;; expect: 1 1 1 1 1
+(display (if (number? 1/3) 1 0))
+(display " ")
+(display (if (exact? 1/3) 1 0))
+(display " ")
+(display (if (rational? 1/3) 1 0))
+(display " ")
+(display (if (rational? 42) 1 0))
+(display " ")
+(display (if (eqv? 1/3 1/3) 1 0))

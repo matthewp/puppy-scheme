@@ -1,0 +1,10 @@
+;; expect: 0.785398 0.0 0.785398 2.356194 -2.356194
+(display (atan 1))
+(display " ")
+(display (atan 0))
+(display " ")
+(display (atan 1 1))
+(display " ")
+(display (atan 1 -1))
+(display " ")
+(display (atan -1 -1))

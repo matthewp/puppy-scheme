@@ -1,0 +1,10 @@
+;; expect: (1 2 3)
+(define (print-list lst)
+  (display "(")
+  (let loop ((l lst) (first #t))
+    (if (null? l) (display ")")
+        (begin
+          (if (not first) (display " "))
+          (display (car l))
+          (loop (cdr l) #f)))))
+(print-list (take '(1 2 3 4 5) 3))

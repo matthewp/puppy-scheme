@@ -1,0 +1,19 @@
+# Compiler build artifacts
+compiler/puppyc
+compiler/puppygc
+compiler/puppypack
+compiler/puppyc-packed
+compiler/*.wasm
+compiler/*.o
+compiler/hello
+compiler/native/runner
+compiler/native/runner_stub
+compiler/native/runner_stub.h
+compiler/native/wasmtime/
+compiler/src/compiler/main.c
+
+# Website build artifacts
+website/website.wasm
+website/dist/
+website/node_modules/
+website/.wrangler/

@@ -1,0 +1,23 @@
+package test:world@2.0.0;
+
+interface logger {
+  log: func(msg: string);
+}
+
+interface renderer {
+  record point { x: f32, y: f32 }
+  render: func(label: string, pos: point) -> bool;
+}
+
+world my-app {
+  import log: func(msg: string);
+  import logger;
+  import wasi:cli/stdout@0.2.0;
+
+  export render: func(label: string) -> bool;
+  export renderer;
+  export wasi:http/handler@0.2.0;
+
+  include other-world;
+  include other:pkg/w@1.0.0 with { foo as bar, baz as qux }
+}

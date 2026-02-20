@@ -1,0 +1,5 @@
+package puppy:website;
+
+world page {
+  export render-page: func() -> string;
+}

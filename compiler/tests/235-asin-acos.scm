@@ -1,0 +1,12 @@
+;; expect: 0.0 1.570796 1.570796 0.0 0.523598 1.047197
+(display (asin 0))
+(display " ")
+(display (asin 1))
+(display " ")
+(display (acos 0))
+(display " ")
+(display (acos 1))
+(display " ")
+(display (asin 0.5))
+(display " ")
+(display (acos 0.5))

@@ -1,0 +1,130 @@
+;; skip: true
+;; wasi-dir: tests
+;; expect:
+;; expect: 48 passed, 0 failed
+
+(define (string-hash s)
+  (let ((len (string-length s)))
+    (let loop ((i 0) (h 0))
+      (if (>= i len) (bitwise-and h 63)
+          (loop (+ i 1) (+ h (char->integer (string-ref s i))))))))
+(define (make-string-ht) (make-vector 64 '()))
+(define (string-ht-set! ht key val)
+  (let ((idx (string-hash key)))
+    (vector-set! ht idx (cons (cons key val) (vector-ref ht idx)))))
+(define (string-ht-ref ht key default)
+  (let ((idx (string-hash key)))
+    (let loop ((b (vector-ref ht idx)))
+      (cond ((null? b) default) ((string=? (caar b) key) (cdar b)) (else (loop (cdr b)))))))
+(define (string-ht-has? ht key)
+  (let ((idx (string-hash key)))
+    (let loop ((b (vector-ref ht idx)))
+      (cond ((null? b) #f) ((string=? (caar b) key) #t) (else (loop (cdr b)))))))
+
+(include "../src/compiler/wit.scm")
+
+(define *pass* 0)
+(define *fail* 0)
+(define (check name expected actual)
+  (if (equal? expected actual)
+      (set! *pass* (+ *pass* 1))
+      (begin
+        (set! *fail* (+ *fail* 1))
+        (display "FAIL: ") (display name) (newline)
+        (display "  expected: ") (write expected) (newline)
+        (display "  actual:   ") (write actual) (newline))))
+
+;;; --- Full file parse tests ---
+
+(define (test-parse-file path)
+  (parse-wit-file path))
+
+;; Trivial
+(let ((pkg (test-parse-file "wit/trivial.wit")))
+  (check "trivial: namespace" "test" (wit-package-namespace pkg))
+  (check "trivial: name" "trivial" (wit-package-name pkg))
+  (check "trivial: version" "1.0.0" (wit-package-version pkg))
+  (check "trivial: one interface" 1 (length (wit-package-interfaces pkg)))
+  (check "trivial: one world" 1 (length (wit-package-worlds pkg)))
+  (let ((iface (car (wit-package-interfaces pkg))))
+    (check "trivial: iface name" "greeter" (wit-interface-name iface))
+    (check "trivial: iface has one item" 1 (length (wit-interface-items iface)))
+    (let ((f (car (wit-interface-items iface))))
+      (check "trivial: func name" "greet" (wit-func-name f))
+      (check "trivial: func params" '(("name" . (prim "string"))) (wit-func-params f))
+      (check "trivial: func result" '(prim "string") (wit-func-result f))))
+  (let ((w (car (wit-package-worlds pkg))))
+    (check "trivial: world name" "hello" (wit-world-name w))
+    (check "trivial: world has one item" 1 (length (wit-world-items w)))))
+
+;; Comments
+(let ((pkg (test-parse-file "wit/comments.wit")))
+  (check "comments: parses ok" "test" (wit-package-namespace pkg))
+  (check "comments: one interface" 1 (length (wit-package-interfaces pkg)))
+  (let ((iface (car (wit-package-interfaces pkg))))
+    (check "comments: iface name" "commented" (wit-interface-name iface))
+    (check "comments: one func" 1 (length (wit-interface-items iface)))))
+
+;; Types
+(let ((pkg (test-parse-file "wit/types.wit")))
+  (check "types: namespace" "test" (wit-package-namespace pkg))
+  (check "types: one interface" 1 (length (wit-package-interfaces pkg)))
+  (let* ((iface (car (wit-package-interfaces pkg)))
+         (items (wit-interface-items iface)))
+    (check "types: iface name" "all-types" (wit-interface-name iface))
+    (check "types: 8 items" 8 (length items))
+    (let ((ta (list-ref items 0)))
+      (check "types: alias name" "my-int" (wit-type-alias-name ta))
+      (check "types: alias type" '(prim "u32") (wit-type-alias-type ta)))
+    (let ((rec (list-ref items 1)))
+      (check "types: record name" "point" (wit-record-name rec))
+      (check "types: record fields" '(("x" . (prim "f32")) ("y" . (prim "f32"))) (wit-record-fields rec)))
+    (let ((var (list-ref items 2)))
+      (check "types: variant name" "filter" (wit-variant-name var))
+      (check "types: variant cases" '(("all" . #f) ("none" . #f) ("some" . (list (prim "string")))) (wit-variant-cases var)))
+    (let ((en (list-ref items 3)))
+      (check "types: enum name" "color" (wit-enum-name en))
+      (check "types: enum cases" '("red" "green" "blue") (wit-enum-cases en)))
+    (let ((fl (list-ref items 4)))
+      (check "types: flags name" "permissions" (wit-flags-name fl))
+      (check "types: flags fields" '("read" "write" "execute") (wit-flags-fields fl)))
+    (let ((res (list-ref items 5)))
+      (check "types: resource name" "blob" (wit-resource-name res))
+      (check "types: resource 4 methods" 4 (length (wit-resource-methods res)))
+      (let ((ctor (list-ref (wit-resource-methods res) 0)))
+        (check "types: constructor name" "constructor" (wit-func-name ctor))
+        (check "types: constructor params" '(("init" . (list (prim "u8")))) (wit-func-params ctor))))))
+
+;; Gates
+(let ((pkg (test-parse-file "wit/gates.wit")))
+  (check "gates: two interfaces" 2 (length (wit-package-interfaces pkg)))
+  (let* ((iface (car (wit-package-interfaces pkg)))
+         (items (wit-interface-items iface)))
+    (check "gates: 4 items" 4 (length items))
+    (check "gates: stable no gate" #f (wit-func-gate (list-ref items 0)))
+    (check "gates: since gate" '((since "1.1.0")) (wit-func-gate (list-ref items 1)))
+    (check "gates: unstable gate" '((unstable "experimental")) (wit-func-gate (list-ref items 2)))
+    (check "gates: since+deprecated" '((since "1.0.0") (deprecated "2.0.0")) (wit-func-gate (list-ref items 3))))
+  (let ((iface2 (list-ref (wit-package-interfaces pkg) 1)))
+    (check "gates: interface gate" '((since "1.1.0")) (wit-interface-gate iface2))))
+
+;; World
+(let ((pkg (test-parse-file "wit/world.wit")))
+  (check "world: 2 interfaces" 2 (length (wit-package-interfaces pkg)))
+  (check "world: 1 world" 1 (length (wit-package-worlds pkg)))
+  (let* ((w (car (wit-package-worlds pkg)))
+         (items (wit-world-items w)))
+    (check "world: name" "my-app" (wit-world-name w))
+    (check "world: 8 items" 8 (length items))))
+
+;;; --- Multi-file merge test ---
+
+(let ((pkg (parse-wit-package (list "wit/trivial.wit" "wit/comments.wit"))))
+  (check "merge: namespace from first" "test" (wit-package-namespace pkg))
+  (check "merge: name from first" "trivial" (wit-package-name pkg))
+  (check "merge: merged interfaces" 2 (length (wit-package-interfaces pkg)))
+  (check "merge: merged worlds" 1 (length (wit-package-worlds pkg))))
+
+(newline)
+(display *pass*) (display " passed, ") (display *fail*) (display " failed") (newline)
+(if (> *fail* 0) (exit 1))

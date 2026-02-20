@@ -1,0 +1,10 @@
+;; expect: 11001101
+(display (string-ci=? "Hello" "hello"))
+(display (string-ci<? "ABC" "abd"))
+(display (string-ci<? "abd" "ABC"))
+(display (string-ci<? "abc" "ABC"))
+(display (string-ci>? "ABD" "abc"))
+(display (string-ci<=? "ABC" "abc"))
+(display (string-ci<=? "abd" "ABC"))
+(display (string-ci>=? "ABC" "abc"))
+(newline)

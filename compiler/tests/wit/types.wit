@@ -1,0 +1,51 @@
+package test:types@0.1.0;
+
+interface all-types {
+  type my-int = u32;
+
+  record point {
+    x: f32,
+    y: f32,
+  }
+
+  variant filter {
+    all,
+    none,
+    some(list<string>),
+  }
+
+  enum color {
+    red,
+    green,
+    blue,
+  }
+
+  flags permissions {
+    read,
+    write,
+    execute,
+  }
+
+  resource blob {
+    constructor(init: list<u8>);
+    write: func(data: list<u8>);
+    read: func(offset: u64, len: u64) -> list<u8>;
+    size: static func() -> u64;
+  }
+
+  use-types: func(
+    a: u8, b: u16, c: u32, d: u64,
+    e: s8, f: s16, g: s32, h: s64,
+    i: f32, j: f64, k: bool, l: char, m: string,
+  );
+
+  complex-types: func(
+    a: list<u32>,
+    b: option<string>,
+    c: tuple<u32, string, bool>,
+    d: result<string, u32>,
+    e: result<string>,
+    f: result,
+    g: borrow<blob>,
+  ) -> option<string>;
+}
