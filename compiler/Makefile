@@ -86,13 +86,7 @@ native/runner_stub: native/runner_precompiled.c $(WASMTIME_MIN_DIR)/lib/libwasmt
 
 # Convert runner stub to embeddable C header
 native/runner_stub.h: native/runner_stub
-	python3 -c "\
-	import sys; d = open('native/runner_stub','rb').read(); \
-	h = ','.join('0x%02x'%b for b in d); \
-	f = open('native/runner_stub.h','w'); \
-	f.write('unsigned char runner_stub[] = {%s};\n' % h); \
-	f.write('unsigned int runner_stub_len = %d;\n' % len(d)); \
-	f.close()"
+	python3 -c "import sys; d = open('native/runner_stub','rb').read(); h = ','.join('0x%02x'%b for b in d); f = open('native/runner_stub.h','w'); f.write('unsigned char runner_stub[] = {%s};\n' % h); f.write('unsigned int runner_stub_len = %d;\n' % len(d)); f.close()"
 
 # puppypack: links against full wasmtime (has compiler for .wasm -> .cwasm)
 puppypack: native/puppypack.c native/runner_stub.h $(WASMTIME_DIR)/lib/libwasmtime.a
