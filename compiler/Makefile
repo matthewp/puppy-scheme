@@ -30,7 +30,7 @@ WASMTIME_MIN_DIR = native/wasmtime/min
 WASMTIME_VERSION = 41.0.3
 
 native/runner: native/runner.c $(WASMTIME_DIR)/lib/libwasmtime.a
-	$(CC) -std=c11 -Wall -Wextra -O2 -I$(WASMTIME_DIR)/include -o $@ $< $(WASMTIME_DIR)/lib/libwasmtime.a $(PLATFORM_LIBS)
+	$(CC) -std=c11 -Wall -Wextra -O2 -I$(WASMTIME_DIR)/include -o $@ native/runner.c $(WASMTIME_DIR)/lib/libwasmtime.a $(PLATFORM_LIBS)
 
 # --- puppypack ---
 
@@ -81,7 +81,7 @@ wasmtime-min:
 
 # Runner stub: linked against minimal wasmtime (no compiler)
 native/runner_stub: native/runner_precompiled.c $(WASMTIME_MIN_DIR)/lib/libwasmtime.a
-	$(CC) -std=c11 -Wall -Wextra -O2 -s -I$(WASMTIME_MIN_DIR)/include -o $@ $< \
+	$(CC) -std=c11 -Wall -Wextra -O2 -s -I$(WASMTIME_MIN_DIR)/include -o $@ native/runner_precompiled.c \
 		$(WASMTIME_MIN_DIR)/lib/libwasmtime.a $(PLATFORM_LIBS)
 
 # Convert runner stub to embeddable C header
@@ -96,7 +96,7 @@ native/runner_stub.h: native/runner_stub
 
 # puppypack: links against full wasmtime (has compiler for .wasm -> .cwasm)
 puppypack: native/puppypack.c native/runner_stub.h $(WASMTIME_DIR)/lib/libwasmtime.a
-	$(CC) -std=c11 -Wall -Wextra -O2 -I$(WASMTIME_DIR)/include -Inative -o $@ $< \
+	$(CC) -std=c11 -Wall -Wextra -O2 -I$(WASMTIME_DIR)/include -Inative -o $@ native/puppypack.c \
 		$(WASMTIME_DIR)/lib/libwasmtime.a $(PLATFORM_LIBS)
 
 puppyc.wasm: $(SCM_MAIN) $(SCM_MACRO) $(SCM_EXPAND) $(SCM_ANALYZE) $(SCM_WASM) $(SCM_CODEGEN_EXPR) $(SCM_CODEGEN) $(SCM_LIBRARY) $(SCM_RUNTIME)
