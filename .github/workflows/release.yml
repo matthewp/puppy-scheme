@@ -242,9 +242,45 @@ jobs:
             compiler/puppyc-freebsd-x86_64
             compiler/puppypack-freebsd-x86_64
 
+  build-deb:
+    runs-on: ubuntu-latest
+    needs: build-linux
+    steps:
+      - name: Download Linux binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-binaries
+
+      - name: Extract version
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Build .deb package
+        run: |
+          PKG=puppy-scheme_${{ steps.version.outputs.VERSION }}_amd64
+          mkdir -p ${PKG}/DEBIAN ${PKG}/usr/bin
+          cat > ${PKG}/DEBIAN/control <<EOF
+          Package: puppy-scheme
+          Version: ${{ steps.version.outputs.VERSION }}
+          Architecture: amd64
+          Maintainer: Matthew Phillips
+          Description: Puppy Scheme compiler targeting WebAssembly
+          EOF
+          sed -i 's/^          //' ${PKG}/DEBIAN/control
+          cp puppyc-linux-x86_64 ${PKG}/usr/bin/puppyc
+          cp puppypack-linux-x86_64 ${PKG}/usr/bin/puppypack
+          chmod 755 ${PKG}/usr/bin/puppyc ${PKG}/usr/bin/puppypack
+          dpkg-deb --build ${PKG}
+
+      - name: Upload .deb package
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-package
+          path: "*.deb"
+
   release:
     runs-on: ubuntu-latest
-    needs: [build-wasm, build-linux, build-macos, build-freebsd]
+    needs: [build-wasm, build-linux, build-macos, build-freebsd, build-deb]
     permissions:
       contents: write
     steps:
@@ -263,3 +299,4 @@ jobs:
             macos-binaries/puppypack-macos-arm64
             freebsd-binaries/puppyc-freebsd-x86_64
             freebsd-binaries/puppypack-freebsd-x86_64
+            deb-package/*.deb
