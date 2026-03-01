@@ -302,7 +302,8 @@
 (define IDX-TY-STREAM-READ 111)  ;; (i32, i64, i32) -> ()
 (define IDX-TY-OPEN-AT 112)     ;; (i32*7) -> ()
 
-(define IDX-MAP-SIZE 113)
+(define IDX-FN-VECTOR-FILL 113)
+(define IDX-MAP-SIZE 114)
 
 ;; Hash table mapping builtin names to their flag index for O(1) scan
 (define *scan-ht*
@@ -411,6 +412,7 @@
         (cons "list->vector" FLAG-VECTOR)
         (cons "vector->list" FLAG-VECTOR)
         (cons "vector?" FLAG-VECTOR)
+        (cons "vector-fill!" FLAG-VECTOR)
         (cons "apply" FLAG-APPLY)
         (cons "file-exists?" FLAG-FILE-EXISTS)
         (cons "get-environment-variable" FLAG-GET-ENV)
@@ -1311,7 +1313,7 @@
            (needs-eqv-type (or needs-eqv needs-equal needs-dispatch needs-complex
                                needs-math needs-string-append needs-bytevector
                                needs-file-io needs-string-ops needs-display
-                               needs-write needs-apply))
+                               needs-write needs-apply needs-vector))
            (needs-io (or needs-display needs-newline needs-write needs-file-io))
            (needs-memory (or needs-io needs-bytevector needs-clock needs-get-env needs-command-line))
            (needs-numstr (or needs-num-to-str needs-str-to-num needs-flonum
@@ -1422,7 +1424,8 @@
       (when needs-vector
         (vector-set! m IDX-FN-VECTOR-COPY (+ nimports nbuiltins)) (set! nbuiltins (+ nbuiltins 1))
         (vector-set! m IDX-FN-LIST-TO-VECTOR (+ nimports nbuiltins)) (set! nbuiltins (+ nbuiltins 1))
-        (vector-set! m IDX-FN-VECTOR-TO-LIST (+ nimports nbuiltins)) (set! nbuiltins (+ nbuiltins 1)))
+        (vector-set! m IDX-FN-VECTOR-TO-LIST (+ nimports nbuiltins)) (set! nbuiltins (+ nbuiltins 1))
+        (vector-set! m IDX-FN-VECTOR-FILL (+ nimports nbuiltins)) (set! nbuiltins (+ nbuiltins 1)))
       (when needs-symbol
         (vector-set! m IDX-FN-INTERN-SYM (+ nimports nbuiltins)) (set! nbuiltins (+ nbuiltins 1)))
       (when needs-apply

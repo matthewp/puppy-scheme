@@ -192,7 +192,7 @@ Building puppypack itself requires the wasmtime C API library and a one-time `ma
 - [x] `vector?`
 - [x] `make-vector` `vector` `vector-length` `vector-ref` `vector-set!`
 - [x] `vector->list` `list->vector` `vector-copy`
-- [ ] `vector-fill!`
+- [x] `vector-fill!`
 
 ### Standard Procedures — Control (6.4)
 
