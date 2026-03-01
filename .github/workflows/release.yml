@@ -178,6 +178,12 @@ jobs:
               | tar xz -C /tmp/wasmtime-build
             WASMTIME_SRC=/tmp/wasmtime-build/wasmtime-${WASMTIME_VERSION}
 
+            # Patch: make declare_vecs available without async feature
+            # Remove the #[cfg(feature = "async")] line before pub(crate) use declare_vecs
+            awk '/^#\[cfg\(feature = "async"\)\]/{getline next_line; if(next_line ~ /pub\(crate\) use declare_vecs/){print next_line}else{print; print next_line}; next} {print}' \
+              ${WASMTIME_SRC}/crates/c-api/src/vec.rs > ${WASMTIME_SRC}/crates/c-api/src/vec.rs.tmp
+            mv ${WASMTIME_SRC}/crates/c-api/src/vec.rs.tmp ${WASMTIME_SRC}/crates/c-api/src/vec.rs
+
             cd ${WASMTIME_SRC}
             cmake -S crates/c-api -B build \
               -DCMAKE_BUILD_TYPE=Release \
