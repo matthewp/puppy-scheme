@@ -161,9 +161,13 @@ jobs:
         with:
           usesh: true
           copyback: true
-          prepare: pkg install -y rust-nightly cmake python3 curl
+          prepare: pkg install -y cmake python3 curl
           run: |
             set -e
+
+            # Install stable Rust via rustup (pkg rust-nightly has compatibility issues)
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            . "$HOME/.cargo/env"
 
             cd compiler
 
@@ -181,7 +185,7 @@ jobs:
               -DWASMTIME_FEATURE_GC=ON \
               -DWASMTIME_FEATURE_GC_DRC=ON \
               -DWASMTIME_FEATURE_WASI=ON \
-              -DWASMTIME_FEATURE_COMPONENT_MODEL=OFF \
+              -DWASMTIME_FEATURE_COMPONENT_MODEL=ON \
               -DWASMTIME_FEATURE_ASYNC=OFF \
               -DWASMTIME_FEATURE_PARALLEL_COMPILATION=OFF \
               -DWASMTIME_FEATURE_CACHE=OFF \
@@ -207,18 +211,17 @@ jobs:
             rm -rf native/wasmtime
             mkdir -p native/wasmtime/lib native/wasmtime/include/wasmtime
             cp ${WASMTIME_SRC}/crates/c-api/include/*.h native/wasmtime/include/
-            sed '/wasmtime\/component\.h/d' native/wasmtime/include/wasmtime.h > native/wasmtime/include/wasmtime.h.tmp
-            mv native/wasmtime/include/wasmtime.h.tmp native/wasmtime/include/wasmtime.h
             cp ${WASMTIME_SRC}/crates/c-api/include/wasmtime/*.h native/wasmtime/include/wasmtime/
-            rm -f native/wasmtime/include/wasmtime/component.h
+            cp -r ${WASMTIME_SRC}/crates/c-api/include/wasmtime/component/ native/wasmtime/include/wasmtime/component/
             cp ${WASMTIME_SRC}/build/include/wasmtime/conf.h native/wasmtime/include/wasmtime/
             cp ${WASMTIME_SRC}/target/*/release/libwasmtime.a native/wasmtime/lib/
 
             # Also use as min (same build serves both purposes on FreeBSD)
-            mkdir -p native/wasmtime/min/lib native/wasmtime/min/include/wasmtime
+            mkdir -p native/wasmtime/min/lib native/wasmtime/min/include/wasmtime/component
             cp native/wasmtime/lib/libwasmtime.a native/wasmtime/min/lib/
             cp native/wasmtime/include/*.h native/wasmtime/min/include/
             cp native/wasmtime/include/wasmtime/*.h native/wasmtime/min/include/wasmtime/
+            cp native/wasmtime/include/wasmtime/component/*.h native/wasmtime/min/include/wasmtime/component/
 
             # Build puppypack and puppyc
             make puppypack
