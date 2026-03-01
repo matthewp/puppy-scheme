@@ -42,8 +42,9 @@ wasmtime-min:
 	curl -sL https://github.com/bytecodealliance/wasmtime/archive/refs/tags/v$(WASMTIME_VERSION).tar.gz \
 		| tar xz -C /tmp/wasmtime-build
 	@echo "Patching: make declare_vecs available without async feature..."
-	sed -i '/^#\[cfg(feature = "async")\]/{N;/pub(crate) use declare_vecs/s/^#\[cfg(feature = "async")\]\n//;}' \
+	sed -i.bak '/^#\[cfg(feature = "async")\]/{N;/pub(crate) use declare_vecs/s/^#\[cfg(feature = "async")\]\n//;}' \
 		$(WASMTIME_SRC)/crates/c-api/src/vec.rs
+	rm -f $(WASMTIME_SRC)/crates/c-api/src/vec.rs.bak
 	@echo "Building minimal wasmtime (requires Rust toolchain)..."
 	cd $(WASMTIME_SRC) && \
 		cmake -S crates/c-api -B build \
