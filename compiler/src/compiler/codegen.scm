@@ -201,6 +201,7 @@
          (fn-vector-copy (vector-ref m IDX-FN-VECTOR-COPY))
          (fn-list-to-vector (vector-ref m IDX-FN-LIST-TO-VECTOR))
          (fn-vector-to-list (vector-ref m IDX-FN-VECTOR-TO-LIST))
+         (fn-vector-fill (vector-ref m IDX-FN-VECTOR-FILL))
          (fn-intern-sym (vector-ref m IDX-FN-INTERN-SYM))
          (fn-apply (vector-ref m IDX-FN-APPLY))
          (fn-file-exists (vector-ref m IDX-FN-FILE-EXISTS))
@@ -929,7 +930,8 @@
                                                fn-clock-now fn-get-arguments fn-get-environment
                                                fn-get-stdin fn-stream-read fn-get-directories
                                                fn-open-at fn-read-via-stream fn-write-via-stream
-                                               fn-drop-descriptor fn-drop-input-stream fn-drop-output-stream))
+                                               fn-drop-descriptor fn-drop-input-stream fn-drop-output-stream
+                                               fn-vector-fill))
                           (ok #t))
 
                       (let ((nstart-locals (count-let-locals forms)))
@@ -1126,7 +1128,8 @@
                             (when needs-vector
                               (compile-rt! sec rt-vector-copy start-ctx)
                               (compile-rt! sec rt-list-to-vector start-ctx)
-                              (compile-rt! sec rt-vector-to-list start-ctx))
+                              (compile-rt! sec rt-vector-to-list start-ctx)
+                              (compile-rt! sec rt-vector-fill start-ctx))
 
                             ;; symbol intern function (hand-written WASM)
                             (when needs-symbol

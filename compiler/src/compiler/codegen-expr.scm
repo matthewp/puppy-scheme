@@ -211,6 +211,7 @@
 (define (ctx-fn-drop-descriptor ctx) (vector-ref ctx 109))
 (define (ctx-fn-drop-input-stream ctx) (vector-ref ctx 110))
 (define (ctx-fn-drop-output-stream ctx) (vector-ref ctx 111))
+(define (ctx-fn-vector-fill ctx) (vector-ref ctx 112))
 (define (ctx-is-boxed? ctx name) (string-ht-has? (ctx-boxed-locals-hash ctx) name))
 
 (define (build-boxed-locals-hash lst)
@@ -347,7 +348,8 @@
                   fn-clock-now fn-get-arguments fn-get-environment
                   fn-get-stdin fn-stream-read fn-get-directories
                   fn-open-at fn-read-via-stream fn-write-via-stream
-                  fn-drop-descriptor fn-drop-input-stream fn-drop-output-stream)
+                  fn-drop-descriptor fn-drop-input-stream fn-drop-output-stream
+                  fn-vector-fill)
   (vector locals nlocals globals funcs lambdas wrappers
           closure-arities nclosure-arity narity
           fn-display fn-newline fn-eqv fn-equal
@@ -388,7 +390,8 @@
           fn-clock-now fn-get-arguments fn-get-environment
           fn-get-stdin fn-stream-read fn-get-directories
           fn-open-at fn-read-via-stream fn-write-via-stream
-          fn-drop-descriptor fn-drop-input-stream fn-drop-output-stream))
+          fn-drop-descriptor fn-drop-input-stream fn-drop-output-stream
+          fn-vector-fill))
 
 (define (ctx-with-locals ctx locals nlocals)
   (let ((new-ctx (vector-copy ctx)))
@@ -1082,7 +1085,7 @@
           "string-set!" "make-string" "substring" "string-copy" "string->list"
           "list->string" "string=?" "string<?" "string-ci=?" "string-ci<?"
           "vector?" "vector-length" "vector-ref"
-          "vector-set!" "make-vector" "vector" "vector-copy" "list->vector" "vector->list" "+"
+          "vector-set!" "make-vector" "vector" "vector-copy" "list->vector" "vector->list" "vector-fill!" "+"
           "-" "*" "/" "quotient" "remainder" "=" "<" ">" "<=" ">="
           "%mem-store8" "%mem-store32" "%mem-load8" "%mem-load32" "%fd-write"
           "%i31-add" "%i31-sub" "%i31-mul" "%i31-div" "%i31-rem"
@@ -2461,6 +2464,7 @@
     ((and (string=? op-str "vector-copy") (= len 2)) (codegen-call-1! (ctx-fn-vector-copy ctx) val body ctx))
     ((and (string=? op-str "list->vector") (= len 2)) (codegen-call-1! (ctx-fn-list-to-vector ctx) val body ctx))
     ((and (string=? op-str "vector->list") (= len 2)) (codegen-call-1! (ctx-fn-vector-to-list ctx) val body ctx))
+    ((and (string=? op-str "vector-fill!") (= len 3)) (codegen-call-2! (ctx-fn-vector-fill ctx) val body ctx))
 
     ;; binary operators (= len 3 case)
     ((and (= len 3)

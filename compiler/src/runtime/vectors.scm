@@ -37,6 +37,19 @@
          (%br 0)))
      result)))
 
+(define rt-vector-fill
+  '(("v" "fill")
+    ("len" "i")
+    ((set! len (%vector-length v))
+     (set! i 0)
+     (%block-void
+       (%loop-void
+         (%br-if 1 (%i31-ge i len))
+         (%vector-set! v i fill)
+         (set! i (%i31-add i 1))
+         (%br 0)))
+     0)))
+
 (define rt-vector-to-list
   '(("v")
     ("len" "i" "result")
