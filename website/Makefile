@@ -5,11 +5,13 @@ build: dist/homepage.wasm dist/counter.wasm dist/main.js dist/runtime.js dist/pu
 dist:
 	mkdir -p dist
 
+PUPPYC = wasmtime run --wasm gc --dir=/ ../compiler/puppyc.wasm --
+
 dist/homepage.wasm: src/homepage.scm src/html.scm src/counter-view.scm src/page.wit | dist
-	../compiler/puppygc --core --wit src/page.wit src/homepage.scm -o dist/homepage.wasm
+	$(PUPPYC) --core --wit $(CURDIR)/src/page.wit -o $(CURDIR)/dist/homepage.wasm $(CURDIR)/src/homepage.scm
 
 dist/counter.wasm: src/counter.scm src/opcodes.scm src/html.scm src/counter-view.scm src/counter.wit | dist
-	../compiler/puppygc --core --wit src/counter.wit src/counter.scm -o dist/counter.wasm
+	$(PUPPYC) --core --wit $(CURDIR)/src/counter.wit -o $(CURDIR)/dist/counter.wasm $(CURDIR)/src/counter.scm
 
 dist/main.js: src/main.js | dist
 	cp src/main.js dist/main.js
