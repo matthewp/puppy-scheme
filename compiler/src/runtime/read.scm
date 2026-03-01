@@ -26,7 +26,7 @@
     `(cons (string->symbol ,name)
            (cons (%call ,fn-read port) (%ref-null))))
 
-  ;; Copy token buffer (mem[200..200+tok-len]) to a GC string, return symbol
+  ;; Copy token buffer (mem[1024..1024+tok-len]) to a GC string, return symbol
   (define tok-to-symbol
     `(begin
        (set! ch (%make-string tok-len 0))
@@ -34,7 +34,7 @@
        (%block-void
          (%loop-void
            (%br-if 1 (%i31-ge i tok-len))
-           (%string-set! ch i (%mem-load8 (%i31-add 200 i)))
+           (%string-set! ch i (%mem-load8 (%i31-add 1024 i)))
            (set! i (%i31-add i 1))
            (%br 0)))
        (string->symbol ch)))
@@ -50,7 +50,7 @@
        (%block-void
          (%loop-void
            (%br-if 1 (%i31-ge i tok-len))
-           (set! ch (%mem-load8 (%i31-add 200 i)))
+           (set! ch (%mem-load8 (%i31-add 1024 i)))
            (%br-if 1 (not (if (%i31-ge ch 48) (%i31-le ch 57) 0)))
            (set! fdigits (%i31-add (%i31-mul fdigits 10) (%i31-sub ch 48)))
            (set! i (%i31-add i 1))
@@ -61,9 +61,9 @@
            ,tok-to-symbol)))
 
   ;; Try to parse token as complex number (e.g., 3+4i, -1-2i, +4i, -1i); fall back to symbol
-  ;; Token is in mem[200..200+tok-len]
+  ;; Token is in mem[1024..1024+tok-len]
   (define try-complex-or-symbol
-    `(if (if (%i31-gt tok-len 1) (%i31-eq (%mem-load8 (%i31-add 200 (%i31-sub tok-len 1))) 105) 0)
+    `(if (if (%i31-gt tok-len 1) (%i31-eq (%mem-load8 (%i31-add 1024 (%i31-sub tok-len 1))) 105) 0)
          ;; Last char is 'i' — try complex
          (begin
            ;; Find the last '+' or '-' (scan backwards from before 'i')
@@ -72,7 +72,7 @@
            (%block-void
              (%loop-void
                (%br-if 1 (%i31-lt i 0))
-               (set! ch (%mem-load8 (%i31-add 200 i)))
+               (set! ch (%mem-load8 (%i31-add 1024 i)))
                (if (if (%i31-eq ch 43) 1 (%i31-eq ch 45))
                    (begin (set! xval i) (%br 2))
                    0)
@@ -89,16 +89,16 @@
                  (if (%i31-gt xval 0)
                      (begin
                        ;; Check for sign on real part
-                       (if (%i31-eq (%mem-load8 200) 45)
+                       (if (%i31-eq (%mem-load8 1024) 45)
                            (begin (set! neg 1) (set! i 1))
-                           (if (%i31-eq (%mem-load8 200) 43)
+                           (if (%i31-eq (%mem-load8 1024) 43)
                                (set! i 1)
                                0))
                        ;; Parse real digits
                        (%block-void
                          (%loop-void
                            (%br-if 1 (%i31-ge i xval))
-                           (set! ch (%mem-load8 (%i31-add 200 i)))
+                           (set! ch (%mem-load8 (%i31-add 1024 i)))
                            (%br-if 1 (not (if (%i31-ge ch 48) (%i31-le ch 57) 0)))
                            (set! num (%i31-add (%i31-mul num 10) (%i31-sub ch 48)))
                            (set! i (%i31-add i 1))
@@ -113,14 +113,14 @@
                        (set! num (if neg (%i31-neg num) num))
                        ;; Parse imaginary part [xval+1..tok-len-1)
                        ;; The char at xval is the sign (+/-)
-                       (set! xneg (%i31-eq (%mem-load8 (%i31-add 200 xval)) 45))
+                       (set! xneg (%i31-eq (%mem-load8 (%i31-add 1024 xval)) 45))
                        (set! fdigits 0)
                        (set! i (%i31-add xval 1))
                        (set! ndigits 0)
                        (%block-void
                          (%loop-void
                            (%br-if 1 (%i31-ge i (%i31-sub tok-len 1)))
-                           (set! ch (%mem-load8 (%i31-add 200 i)))
+                           (set! ch (%mem-load8 (%i31-add 1024 i)))
                            (%br-if 1 (not (if (%i31-ge ch 48) (%i31-le ch 57) 0)))
                            (set! fdigits (%i31-add (%i31-mul fdigits 10) (%i31-sub ch 48)))
                            (set! ndigits (%i31-add ndigits 1))
@@ -137,12 +137,12 @@
          ,tok-to-symbol))
 
   ;; Try to parse token as floating-point number; fall back to symbol
-  ;; Token is in mem[200..200+tok-len], sign in neg
+  ;; Token is in mem[1024..1024+tok-len], sign in neg
   (define try-float-or-symbol
     `(begin
        ;; Compute start position (skip sign char if present)
        (set! i (if (if (%i31-gt tok-len 1)
-                       (if (%i31-eq (%mem-load8 200) 45) 1 (%i31-eq (%mem-load8 200) 43))
+                       (if (%i31-eq (%mem-load8 1024) 45) 1 (%i31-eq (%mem-load8 1024) 43))
                        0)
                    1 0))
        ;; Initialize f64 accumulator to 0.0
@@ -154,7 +154,7 @@
        (%block-void
          (%loop-void
            (%br-if 1 (%i31-ge i tok-len))
-           (set! ch (%mem-load8 (%i31-add 200 i)))
+           (set! ch (%mem-load8 (%i31-add 1024 i)))
            ;; Break if not digit and not dot
            (%br-if 1 (not (if (if (%i31-ge ch 48) (%i31-le ch 57) 0) 1 (%i31-eq ch 46))))
            ;; If dot, set flag; if digit, accumulate
@@ -171,16 +171,16 @@
        (set! xval 0)
        (set! xneg 0)
        (if (if (%i31-lt i tok-len)
-               (if (%i31-eq (%mem-load8 (%i31-add 200 i)) 101) 1
-                   (%i31-eq (%mem-load8 (%i31-add 200 i)) 69))
+               (if (%i31-eq (%mem-load8 (%i31-add 1024 i)) 101) 1
+                   (%i31-eq (%mem-load8 (%i31-add 1024 i)) 69))
                0)
            (begin
              (set! i (%i31-add i 1))
              ;; Exponent sign
              (if (%i31-lt i tok-len)
-                 (if (%i31-eq (%mem-load8 (%i31-add 200 i)) 45)
+                 (if (%i31-eq (%mem-load8 (%i31-add 1024 i)) 45)
                      (begin (set! xneg 1) (set! i (%i31-add i 1)))
-                     (if (%i31-eq (%mem-load8 (%i31-add 200 i)) 43)
+                     (if (%i31-eq (%mem-load8 (%i31-add 1024 i)) 43)
                          (set! i (%i31-add i 1))
                          0))
                  0)
@@ -188,7 +188,7 @@
              (%block-void
                (%loop-void
                  (%br-if 1 (%i31-ge i tok-len))
-                 (set! ch (%mem-load8 (%i31-add 200 i)))
+                 (set! ch (%mem-load8 (%i31-add 1024 i)))
                  (%br-if 1 (not (if (%i31-ge ch 48) (%i31-le ch 57) 0)))
                  (set! xval (%i31-add (%i31-mul xval 10) (%i31-sub ch 48)))
                  (set! i (%i31-add i 1))
@@ -222,12 +222,12 @@
            ;; Not a valid float → try complex or symbol
            ,try-complex-or-symbol)))
 
-  ;; Read atom: consume token into mem[200+], try integer parse, else float or symbol
+  ;; Read atom: consume token into mem[1024+], try integer parse, else float or symbol
   (define read-atom
     `(begin
        ;; Store first char and consume it
        (set! tok-len 0)
-       (%mem-store8 200 code)
+       (%mem-store8 1024 code)
        (set! tok-len 1)
        (%call ,fn-read-char port)
        ;; Read more chars until delimiter or EOF
@@ -237,7 +237,7 @@
            (%br-if 1 (%eof? ch))
            (set! code (%char-code ch))
            (%br-if 1 ,(delim? 'code))
-           (%mem-store8 (%i31-add 200 tok-len) code)
+           (%mem-store8 (%i31-add 1024 tok-len) code)
            (set! tok-len (%i31-add tok-len 1))
            (%call ,fn-read-char port)
            (%br 0)))
@@ -246,9 +246,9 @@
        (set! neg 0)
        (set! num 0)
        ;; Check for sign prefix (only if more than 1 char)
-       (if (if (%i31-gt tok-len 1) (%i31-eq (%mem-load8 200) 45) 0)
+       (if (if (%i31-gt tok-len 1) (%i31-eq (%mem-load8 1024) 45) 0)
            (begin (set! neg 1) (set! i 1))
-           (if (if (%i31-gt tok-len 1) (%i31-eq (%mem-load8 200) 43) 0)
+           (if (if (%i31-gt tok-len 1) (%i31-eq (%mem-load8 1024) 43) 0)
                (set! i 1)
                0))
        ;; Save digit start position (for rational check)
@@ -257,7 +257,7 @@
        (%block-void
          (%loop-void
            (%br-if 1 (%i31-ge i tok-len))
-           (set! ch (%mem-load8 (%i31-add 200 i)))
+           (set! ch (%mem-load8 (%i31-add 1024 i)))
            (%br-if 1 (not (if (%i31-ge ch 48) (%i31-le ch 57) 0)))
            (set! num (%i31-add (%i31-mul num 10) (%i31-sub ch 48)))
            (set! i (%i31-add i 1))
@@ -277,7 +277,7 @@
        (set! code (%char-code ch))
        ;; Read more lowercase letters for named chars
        (set! tok-len 0)
-       (%mem-store8 200 code)
+       (%mem-store8 1024 code)
        (set! tok-len 1)
        (%block-void
          (%loop-void
@@ -285,23 +285,23 @@
            (%br-if 1 (%eof? ch))
            (set! i (%char-code ch))
            (%br-if 1 (not (if (%i31-ge i 97) (%i31-le i 122) 0)))
-           (%mem-store8 (%i31-add 200 tok-len) i)
+           (%mem-store8 (%i31-add 1024 tok-len) i)
            (set! tok-len (%i31-add tok-len 1))
            (%call ,fn-read-char port)
            (%br 0)))
        ;; Single char → char literal
        (if (%i31-eq tok-len 1)
-           (%make-char (%mem-load8 200))
+           (%make-char (%mem-load8 1024))
            ;; Named: space(5,'s'=115), newline(7,'n'=110), tab(3,'t'=116), return(6,'r'=114)
-           (if (if (%i31-eq tok-len 5) (%i31-eq (%mem-load8 200) 115) 0)
+           (if (if (%i31-eq tok-len 5) (%i31-eq (%mem-load8 1024) 115) 0)
                (%make-char 32)
-               (if (if (%i31-eq tok-len 7) (%i31-eq (%mem-load8 200) 110) 0)
+               (if (if (%i31-eq tok-len 7) (%i31-eq (%mem-load8 1024) 110) 0)
                    (%make-char 10)
-                   (if (if (%i31-eq tok-len 3) (%i31-eq (%mem-load8 200) 116) 0)
+                   (if (if (%i31-eq tok-len 3) (%i31-eq (%mem-load8 1024) 116) 0)
                        (%make-char 9)
-                       (if (if (%i31-eq tok-len 6) (%i31-eq (%mem-load8 200) 114) 0)
+                       (if (if (%i31-eq tok-len 6) (%i31-eq (%mem-load8 1024) 114) 0)
                            (%make-char 13)
-                           (%make-char (%mem-load8 200)))))))))
+                           (%make-char (%mem-load8 1024)))))))))
 
   ;; Handle #x<hex-digits> hex literal
   (define read-hex-literal
@@ -351,8 +351,8 @@
                                  (begin
                                    (%call ,fn-read-char port)
                                    (set! tok-len 0)
-                                   (%mem-store8 200 35)
-                                   (%mem-store8 201 35)
+                                   (%mem-store8 1024 35)
+                                   (%mem-store8 1025 35)
                                    (set! tok-len 2)
                                    (%block-void
                                      (%loop-void
@@ -360,7 +360,7 @@
                                        (%br-if 1 (%eof? ch))
                                        (set! code (%char-code ch))
                                        (%br-if 1 ,(delim? 'code))
-                                       (%mem-store8 (%i31-add 200 tok-len) code)
+                                       (%mem-store8 (%i31-add 1024 tok-len) code)
                                        (set! tok-len (%i31-add tok-len 1))
                                        (%call ,fn-read-char port)
                                        (%br 0)))
@@ -378,7 +378,7 @@
            (%br-if 1 (%eof? ch))
            (set! code (%char-code ch))
            (%br-if 1 (%i31-eq code 124))  ;; closing |
-           (%mem-store8 (%i31-add 200 tok-len) code)
+           (%mem-store8 (%i31-add 1024 tok-len) code)
            (set! tok-len (%i31-add tok-len 1))
            (%br 0)))
        ,tok-to-symbol))
@@ -532,10 +532,10 @@
                                ;; Dot followed by non-delimiter → token like ... or ..
                                ;; Build token in memory buffer, convert to symbol
                                (begin
-                                 (%mem-store8 200 46)
+                                 (%mem-store8 1024 46)
                                  (set! tok-len 1)
                                  (set! ch (%call ,fn-read-char port))
-                                 (%mem-store8 (%i31-add 200 tok-len) (%char-code ch))
+                                 (%mem-store8 (%i31-add 1024 tok-len) (%char-code ch))
                                  (set! tok-len (%i31-add tok-len 1))
                                  (%block-void
                                    (%loop-void
@@ -543,7 +543,7 @@
                                      (%br-if 1 (%eof? ch))
                                      (set! code (%char-code ch))
                                      (%br-if 1 ,(delim? 'code))
-                                     (%mem-store8 (%i31-add 200 tok-len) code)
+                                     (%mem-store8 (%i31-add 1024 tok-len) code)
                                      (set! tok-len (%i31-add tok-len 1))
                                      (%call ,fn-read-char port)
                                      (%br 0)))
@@ -552,7 +552,7 @@
                                  (%block-void
                                    (%loop-void
                                      (%br-if 1 (%i31-ge i tok-len))
-                                     (%string-set! tmp i (%mem-load8 (%i31-add 200 i)))
+                                     (%string-set! tmp i (%mem-load8 (%i31-add 1024 i)))
                                      (set! i (%i31-add i 1))
                                      (%br 0)))
                                  (cons datum (cons (string->symbol tmp)
@@ -569,7 +569,7 @@
     (list
       `(begin
          (set! tok-len 0)
-         ;; Read chars into mem[200+] until closing "
+         ;; Read chars into mem[1024+] until closing "
          (%block-void
            (%loop-void
              (set! ch (%call ,fn-read-char port))
@@ -582,14 +582,14 @@
                  (begin
                    (set! ch (%call ,fn-read-char port))
                    (set! code (%char-code ch))
-                   (%mem-store8 (%i31-add 200 tok-len)
+                   (%mem-store8 (%i31-add 1024 tok-len)
                      (if (%i31-eq code 110) 10
                          (if (%i31-eq code 116) 9
                              (if (%i31-eq code 34) 34
                                  (if (%i31-eq code 92) 92
                                      code))))))
                  ;; Normal char
-                 (%mem-store8 (%i31-add 200 tok-len) code))
+                 (%mem-store8 (%i31-add 1024 tok-len) code))
              (set! tok-len (%i31-add tok-len 1))
              (%br 0)))
          ;; Build GC string from buffer
@@ -598,7 +598,7 @@
          (%block-void
            (%loop-void
              (%br-if 1 (%i31-ge i tok-len))
-             (%string-set! arr i (%mem-load8 (%i31-add 200 i)))
+             (%string-set! arr i (%mem-load8 (%i31-add 1024 i)))
              (set! i (%i31-add i 1))
              (%br 0)))
          arr))))

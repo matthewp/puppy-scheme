@@ -12,7 +12,9 @@
     (let loop ((i 0) (h 0))
       (if (>= i len)
           (bitwise-and h 63)
-          (loop (+ i 1) (+ h (char->integer (string-ref s i))))))))
+          (loop (+ i 1)
+                (bitwise-and (+ h (char->integer (string-ref s i)))
+                             #x3FFFFFFF))))))
 
 (define (make-string-ht)
   (make-vector 64 '()))
@@ -36,6 +38,19 @@
         ((null? b) #f)
         ((string=? (caar b) key) #t)
         (else (loop (cdr b)))))))
+
+(define (wit-export-or-import-name? name)
+  (and *wit-world*
+       (let loop ((items (wit-world-items *wit-world*)))
+         (cond
+           ((null? items) #f)
+           ((and (pair? (car items))
+                 (or (eq? (car (car items)) 'export)
+                     (eq? (car (car items)) 'import))
+                 (= (length (car items)) 3)
+                 (string=? (cadr (car items)) name))
+            #t)
+           (else (loop (cdr items)))))))
 
 ;;; --- Growable list (O(1) append via tail pointer) ---
 ;;; glist is a 3-element vector: #(head tail count)
@@ -1616,9 +1631,10 @@
                               (let ((uf (car fs)))
                                 (loop (cdr fs)
                                       (cond
-                                        ;; Named: keep if reachable
+                                        ;; Named: keep if reachable or WIT export/import
                                         ((uf-name uf)
-                                         (if (string-ht-has? reachable (uf-name uf))
+                                         (if (or (string-ht-has? reachable (uf-name uf))
+                                                 (wit-export-or-import-name? (uf-name uf)))
                                              (cons uf acc)
                                              acc))
                                         ;; Anonymous lambda: look up synthetic ID

@@ -12,7 +12,7 @@
      (%block-void
        (%loop-void
          (%br-if 1 (%i31-ge i plen))
-         (%mem-store8 (%i31-add 200 i) (%string-ref path (%i31-add start i)))
+         (%mem-store8 (%i31-add 1024 i) (%string-ref path (%i31-add start i)))
          (set! i (%i31-add i 1))
          (%br 0)))
      (%call-get-directories 0)
@@ -24,7 +24,7 @@
        (%loop-void
          (%br-if 1 (%i31-ge i count))
          (set! dirhandle (%mem-load32 (%i31-add ptr (%i31-mul i 12))))
-         (%call-open-at dirhandle 0 200 plen 0 1 80)
+         (%call-open-at dirhandle 0 1024 plen 0 1 80)
          (set! disc (%mem-load32 80))
          (%br-if 1 (%i31-eqz disc))
          (set! i (%i31-add i 1))

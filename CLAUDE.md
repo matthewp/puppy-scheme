@@ -23,6 +23,7 @@ tools/        — JS tooling and utilities (future)
 ## Workflow
 
 - Never commit without being explicitly asked to
+- **Self-hosting must always work.** `puppyc.wasm` must be able to compile itself. Every task must end with `make puppyc.wasm` succeeding via self-hosting (not Gambit). If self-hosting is broken, fixing it is the top priority — no exceptions.
 
 ## Code Style
 
