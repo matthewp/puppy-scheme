@@ -769,7 +769,8 @@
                   (when needs-vector
                     (wbuf-u32! sec ty-numstr)    ;; vector-copy (1 arg)
                     (wbuf-u32! sec ty-numstr)    ;; list->vector (1 arg)
-                    (wbuf-u32! sec ty-numstr))   ;; vector->list (1 arg)
+                    (wbuf-u32! sec ty-numstr)    ;; vector->list (1 arg)
+                    (wbuf-u32! sec ty-eqv))      ;; vector-fill! (2 args)
                   (when needs-symbol
                     (wbuf-u32! sec ty-numstr))   ;; intern-sym (1 arg)
                   (when needs-apply

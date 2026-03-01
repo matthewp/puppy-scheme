@@ -1313,7 +1313,7 @@
            (needs-eqv-type (or needs-eqv needs-equal needs-dispatch needs-complex
                                needs-math needs-string-append needs-bytevector
                                needs-file-io needs-string-ops needs-display
-                               needs-write needs-apply))
+                               needs-write needs-apply needs-vector))
            (needs-io (or needs-display needs-newline needs-write needs-file-io))
            (needs-memory (or needs-io needs-bytevector needs-clock needs-get-env needs-command-line))
            (needs-numstr (or needs-num-to-str needs-str-to-num needs-flonum
