@@ -15,21 +15,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Gambit
-        run: sudo apt-get install -y gambc
-        working-directory: .
-
       - name: Install wasmtime
         working-directory: .
         run: |
           curl https://wasmtime.dev/install.sh -sSf | bash
           echo "$HOME/.wasmtime/bin" >> $GITHUB_PATH
 
-      - name: Build puppygc (Gambit bootstrap)
-        run: make GSC=/usr/bin/gsc puppygc
+      - name: Download bootstrap puppyc.wasm
+        run: |
+          curl -sL https://github.com/matthewp/puppy-scheme/releases/latest/download/puppyc.wasm -o puppyc.wasm
 
-      - name: Build puppyc.wasm (via puppygc)
-        run: ./puppygc -o puppyc.wasm src/compiler/main.scm
+      - name: Build puppyc.wasm (self-hosted)
+        run: |
+          wasmtime run --wasm gc --dir=/ puppyc.wasm -- -o $(pwd)/puppyc.wasm.tmp $(pwd)/src/compiler/main.scm
+          mv puppyc.wasm.tmp puppyc.wasm
 
       - name: Run tests
         run: make test

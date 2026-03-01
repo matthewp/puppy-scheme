@@ -24,7 +24,7 @@
 (include "codegen-expr.scm")
 (include "codegen.scm")
 
-(define puppy-version "0.1.0")
+(define puppy-version "0.0.1")
 
 (define (usage)
   (display "Usage: puppyc [options] <input.scm> [-o <output.wasm>]\n" (current-error-port))
@@ -95,7 +95,7 @@
              (usage)
              (exit 0))
             ((or (string=? arg "-v") (string=? arg "--version"))
-             (display (string-append "puppyc " puppy-version "\n"))
+             (display (string-append puppy-version "\n"))
              (exit 0))
             ((string=? arg "--profile")
              (loop rest target input output #t lib-path wit-files core?))
