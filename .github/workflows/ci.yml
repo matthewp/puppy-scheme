@@ -25,8 +25,11 @@ jobs:
           curl https://wasmtime.dev/install.sh -sSf | bash
           echo "$HOME/.wasmtime/bin" >> $GITHUB_PATH
 
-      - name: Build puppyc.wasm
-        run: make GSC=/usr/bin/gsc puppyc.wasm
+      - name: Build puppygc (Gambit bootstrap)
+        run: make GSC=/usr/bin/gsc puppygc
+
+      - name: Build puppyc.wasm (via puppygc)
+        run: ./puppygc -o puppyc.wasm src/compiler/main.scm
 
       - name: Run tests
         run: make test
