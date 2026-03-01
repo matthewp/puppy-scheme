@@ -1,8 +1,6 @@
 PREFIX ?= /usr/local
 CC = cc
-GSC = /usr/local/Gambit/bin/gsc
 CFLAGS = -std=c11 -D_GNU_SOURCE -Wall -Wextra -O2 -Isrc
-BIN = puppygc
 
 PLATFORM_LIBS != if [ `uname -s` = Linux ]; then echo '-lpthread -ldl -lm'; else echo '-lpthread -lm'; fi
 
@@ -17,14 +15,8 @@ SCM_CODEGEN = src/compiler/codegen.scm
 SCM_LIBRARY = src/compiler/library.scm
 SCM_RUNTIME != echo src/runtime/*.scm
 
-$(BIN): $(SCM_MAIN) $(SCM_MACRO) $(SCM_EXPAND) $(SCM_ANALYZE) $(SCM_WASM) $(SCM_CODEGEN_EXPR) $(SCM_CODEGEN) $(SCM_LIBRARY) $(SCM_RUNTIME)
-	$(GSC) -exe -o $@ -cc-options "-O2" $(SCM_MAIN)
-
 test: puppyc.wasm
 	@if [ -n "$(TEST)" ]; then tests/run_tests.sh ./tests/run_wasm.sh tests/$(TEST).scm; else tests/run_tests.sh ./tests/run_wasm.sh; fi
-
-test-gambit: $(BIN)
-	@if [ -n "$(TEST)" ]; then tests/run_tests.sh ./$(BIN) tests/$(TEST).scm; else tests/run_tests.sh ./$(BIN); fi
 
 puppyc: puppypack puppyc.wasm
 	./puppypack puppyc.wasm --dir=/ -o puppyc
@@ -119,11 +111,8 @@ hello: native/runner hello.wasm
 	python3 -c "import struct,sys; sys.stdout.buffer.write(struct.pack('<Q', $$(stat -c%s hello.wasm)))" >> $@
 	chmod +x $@
 
-test-expand: tests/test_expand.scm $(SCM_MACRO) $(SCM_EXPAND)
-	$(GSC) -exe -o /tmp/test_expand $< && /tmp/test_expand
-
 clean:
-	rm -f $(BIN) puppygc native/runner hello.wasm hello puppyc.wasm puppyc
+	rm -f native/runner hello.wasm hello puppyc.wasm puppyc
 	rm -f native/runner_stub native/runner_stub.h puppypack puppyc-packed
 
-.PHONY: test test-gambit test-expand clean install wasmtime-min
+.PHONY: test clean install wasmtime-min

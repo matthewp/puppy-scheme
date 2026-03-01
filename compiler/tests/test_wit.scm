@@ -1,5 +1,4 @@
 ;;; test_wit.scm — Unit tests for the WIT parser
-;;; Run: cd compiler && gsc -exe -o /tmp/test_wit tests/test_wit.scm && /tmp/test_wit
 
 (include "../src/compiler/analyze.scm")
 (include "../src/compiler/wit.scm")

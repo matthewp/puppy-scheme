@@ -1918,14 +1918,6 @@
                           (emit-box-i31! body)
                           #t)))))))
 
-    ;; ##flonum->ieee754-64 — dummy for Gambit compat (dead code in self-hosted builds)
-    ((and (string=? op-str "##flonum->ieee754-64") (= len 2))
-     (and (codegen-expr (cadr val) body ctx)
-          (begin
-            (wbuf-byte! body OP-DROP)
-            (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 0)
-            (emit-box-i31! body) #t)))
-
     ((and (string=? op-str "bytevector->pointer") (= len 2)) (codegen-struct-get-i31! (ctx-ty-bytevector ctx) 0 val body ctx))
 
     ((and (string=? op-str "bytevector-copy-string!") (= len 4)) (codegen-call-3! (ctx-fn-bv-copy-str ctx) val body ctx))

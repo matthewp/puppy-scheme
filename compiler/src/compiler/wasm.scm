@@ -351,20 +351,6 @@
   ;; Signed LEB128 (same algorithm, Scheme integers are arbitrary precision)
   (wbuf-i32! buf v))
 
-(define (bytevector-f64-native-set! bv offset v)
-  ;; Gambit bootstrap: uses Gambit's flonum->ieee754 intrinsic.
-  ;; When compiled by puppyc, calls are handled by the codegen as a
-  ;; builtin (f64.store), so this body is dead code in self-hosted builds.
-  (let ((bits (##flonum->ieee754-64 v)))
-    (bytevector-u8-set! bv offset       (bitwise-and bits #xFF))
-    (bytevector-u8-set! bv (+ offset 1) (bitwise-and (arithmetic-shift bits -8) #xFF))
-    (bytevector-u8-set! bv (+ offset 2) (bitwise-and (arithmetic-shift bits -16) #xFF))
-    (bytevector-u8-set! bv (+ offset 3) (bitwise-and (arithmetic-shift bits -24) #xFF))
-    (bytevector-u8-set! bv (+ offset 4) (bitwise-and (arithmetic-shift bits -32) #xFF))
-    (bytevector-u8-set! bv (+ offset 5) (bitwise-and (arithmetic-shift bits -40) #xFF))
-    (bytevector-u8-set! bv (+ offset 6) (bitwise-and (arithmetic-shift bits -48) #xFF))
-    (bytevector-u8-set! bv (+ offset 7) (bitwise-and (arithmetic-shift bits -56) #xFF))))
-
 (define (wbuf-f64! buf v)
   (wbuf-ensure! buf 8)
   (bytevector-f64-native-set! (wbuf-data buf) (wbuf-len buf) v)

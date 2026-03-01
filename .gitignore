@@ -1,6 +1,5 @@
 # Compiler build artifacts
 compiler/puppyc
-compiler/puppygc
 compiler/puppypack
 compiler/puppyc-packed
 compiler/*.wasm

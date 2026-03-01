@@ -1,4 +1,4 @@
-;;; main.scm — Puppy Scheme compiler entry point (Gambit)
+;;; main.scm — Puppy Scheme compiler entry point
 ;;; Replaces main.c: argument parsing, read loop, expand, analyze, codegen, output
 
 (include "wasm.scm")
@@ -158,7 +158,7 @@
           (reverse acc)
           (loop (cons form acc))))))
 
-;;; --- Path utilities (pure Scheme replacements for Gambit builtins) ---
+;;; --- Path utilities ---
 
 (define (path-directory path)
   ;; Return directory portion of path, with trailing /

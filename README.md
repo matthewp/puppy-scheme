@@ -31,8 +31,7 @@ tools/        — JS tooling and utilities (planned)
 
 ### Optional
 
-- **Gambit Scheme** — for bootstrapping `puppyc.wasm` from scratch (`make puppygc`)
-- **C compiler** — needed for Gambit bootstrap and puppypack builds
+- **C compiler** — needed for puppypack builds
 - **Rust toolchain + cmake** — for building puppypack (native binary packaging)
 
 ### Building and Testing
@@ -41,13 +40,9 @@ tools/        — JS tooling and utilities (planned)
 cd compiler
 make test                        # run test suite (uses puppyc.wasm)
 make test TEST=040-display       # run a single test
-make test-gambit                 # run tests via Gambit-compiled compiler
-make puppygc                     # build Gambit-compiled compiler
-make puppyc.wasm                 # build self-hosted WASM compiler (requires puppygc)
+make puppyc.wasm                 # rebuild self-hosted WASM compiler
 make clean
 ```
-
-The default `make test` runs the self-hosted compiler (`puppyc.wasm` via wasmtime). `make test-gambit` runs the same tests through the Gambit-compiled `puppygc` binary.
 
 ### puppypack
 

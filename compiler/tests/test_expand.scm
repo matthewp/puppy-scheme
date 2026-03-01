@@ -1,5 +1,4 @@
 ;;; test_expand.scm — Unit tests for the expander
-;;; Run: gsc -exe -o /tmp/test_expand tests/test_expand.scm && /tmp/test_expand
 
 (include "../src/compiler/macro.scm")
 (include "../src/compiler/expand.scm")
