@@ -181,7 +181,7 @@ jobs:
               -DWASMTIME_FEATURE_GC=ON \
               -DWASMTIME_FEATURE_GC_DRC=ON \
               -DWASMTIME_FEATURE_WASI=ON \
-              -DWASMTIME_FEATURE_COMPONENT_MODEL=OFF \
+              -DWASMTIME_FEATURE_COMPONENT_MODEL=ON \
               -DWASMTIME_FEATURE_ASYNC=OFF \
               -DWASMTIME_FEATURE_PARALLEL_COMPILATION=OFF \
               -DWASMTIME_FEATURE_CACHE=OFF \
@@ -205,17 +205,19 @@ jobs:
 
             # Set up wasmtime dirs for the full build (with Cranelift for puppypack)
             rm -rf native/wasmtime
-            mkdir -p native/wasmtime/lib native/wasmtime/include/wasmtime
+            mkdir -p native/wasmtime/lib native/wasmtime/include/wasmtime/component
             cp ${WASMTIME_SRC}/crates/c-api/include/*.h native/wasmtime/include/
             cp ${WASMTIME_SRC}/crates/c-api/include/wasmtime/*.h native/wasmtime/include/wasmtime/
+            cp -r ${WASMTIME_SRC}/crates/c-api/include/wasmtime/component/*.h native/wasmtime/include/wasmtime/component/
             cp ${WASMTIME_SRC}/build/include/wasmtime/conf.h native/wasmtime/include/wasmtime/
             cp ${WASMTIME_SRC}/target/*/release/libwasmtime.a native/wasmtime/lib/
 
             # Also use as min (same build serves both purposes on FreeBSD)
-            mkdir -p native/wasmtime/min/lib native/wasmtime/min/include/wasmtime
+            mkdir -p native/wasmtime/min/lib native/wasmtime/min/include/wasmtime/component
             cp native/wasmtime/lib/libwasmtime.a native/wasmtime/min/lib/
             cp native/wasmtime/include/*.h native/wasmtime/min/include/
             cp native/wasmtime/include/wasmtime/*.h native/wasmtime/min/include/wasmtime/
+            cp native/wasmtime/include/wasmtime/component/*.h native/wasmtime/min/include/wasmtime/component/
 
             # Build puppypack and puppyc
             make puppypack
