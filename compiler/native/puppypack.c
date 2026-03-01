@@ -101,7 +101,9 @@ int main(int argc, char *argv[]) {
     // Engine config must match the minimal runner's capabilities
     wasm_config_t *config = wasm_config_new();
     wasmtime_config_wasm_gc_set(config, true);
+#ifdef WASMTIME_FEATURE_THREADS
     wasmtime_config_wasm_threads_set(config, false);
+#endif
     if (is_component)
         wasmtime_config_wasm_component_model_set(config, true);
     wasm_engine_t *engine = wasm_engine_new_with_config(config);
