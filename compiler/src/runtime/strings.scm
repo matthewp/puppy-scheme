@@ -230,6 +230,20 @@
                (%br 0)))
            result)))))
 
+(define rt-string-fill
+  '(("s" "ch")
+    ("len" "i" "c")
+    ((set! c (%char-code ch))
+     (set! len (%string-length s))
+     (set! i 0)
+     (%block-void
+       (%loop-void
+         (%br-if 1 (%i31-ge i len))
+         (%string-set! s i c)
+         (set! i (%i31-add i 1))
+         (%br 0)))
+     0)))
+
 (define rt-string-ci-lt
   '(("a" "b")
     ("len-a" "len-b" "min-len" "i" "ca" "cb" "done" "result")

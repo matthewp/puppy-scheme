@@ -184,7 +184,7 @@ Building puppypack itself requires the wasmtime C API library and a one-time `ma
 - [x] `substring` `string-copy`
 - [x] `string-append`
 - [x] `string->list` `list->string`
-- [ ] `string-fill!`
+- [x] `string-fill!`
 - [x] Case-insensitive variants (`string-ci=?` ...)
 
 ### Standard Procedures — Vectors (6.3.6)

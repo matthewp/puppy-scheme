@@ -195,6 +195,7 @@
          (fn-string-lt (vector-ref m IDX-FN-STRING-LT))
          (fn-string-ci-eq (vector-ref m IDX-FN-STRING-CI-EQ))
          (fn-string-ci-lt (vector-ref m IDX-FN-STRING-CI-LT))
+         (fn-string-fill (vector-ref m IDX-FN-STRING-FILL))
          (fn-read (vector-ref m IDX-FN-READ))
          (fn-read-list (vector-ref m IDX-FN-READ-LIST))
          (fn-read-string (vector-ref m IDX-FN-READ-STRING))
@@ -761,7 +762,8 @@
                     (wbuf-u32! sec ty-eqv)       ;; string=? (2 args)
                     (wbuf-u32! sec ty-eqv)       ;; string<? (2 args)
                     (wbuf-u32! sec ty-eqv)       ;; string-ci=? (2 args)
-                    (wbuf-u32! sec ty-eqv))      ;; string-ci<? (2 args)
+                    (wbuf-u32! sec ty-eqv)       ;; string-ci<? (2 args)
+                    (wbuf-u32! sec ty-eqv))      ;; string-fill! (2 args)
                   (when needs-read
                     (wbuf-u32! sec ty-numstr)    ;; read (1 arg)
                     (wbuf-u32! sec ty-numstr)    ;; read-list (1 arg)
@@ -932,7 +934,7 @@
                                                fn-get-stdin fn-stream-read fn-get-directories
                                                fn-open-at fn-read-via-stream fn-write-via-stream
                                                fn-drop-descriptor fn-drop-input-stream fn-drop-output-stream
-                                               fn-vector-fill))
+                                               fn-vector-fill fn-string-fill))
                           (ok #t))
 
                       (let ((nstart-locals (count-let-locals forms)))
@@ -1111,7 +1113,8 @@
                               (compile-rt! sec rt-string-eq start-ctx)
                               (compile-rt! sec rt-string-lt start-ctx)
                               (compile-rt! sec rt-string-ci-eq start-ctx)
-                              (compile-rt! sec rt-string-ci-lt start-ctx))
+                              (compile-rt! sec rt-string-ci-lt start-ctx)
+                              (compile-rt! sec rt-string-fill start-ctx))
                             ;; read
                             (when needs-read
                               (compile-rt! sec

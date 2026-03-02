@@ -303,7 +303,8 @@
 (define IDX-TY-OPEN-AT 112)     ;; (i32*7) -> ()
 
 (define IDX-FN-VECTOR-FILL 113)
-(define IDX-MAP-SIZE 114)
+(define IDX-FN-STRING-FILL 114)
+(define IDX-MAP-SIZE 115)
 
 ;; Hash table mapping builtin names to their flag index for O(1) scan
 (define *scan-ht*
@@ -401,6 +402,7 @@
         (cons "string-ci>?" FLAG-STRING-OPS)
         (cons "string-ci<=?" FLAG-STRING-OPS)
         (cons "string-ci>=?" FLAG-STRING-OPS)
+        (cons "string-fill!" FLAG-STRING-OPS)
         (cons "current-milliseconds" FLAG-CLOCK)
         (cons "read" FLAG-READ)
         (cons "vector" FLAG-VECTOR)
@@ -1416,7 +1418,8 @@
         (vector-set! m IDX-FN-STRING-EQ (+ nimports nbuiltins)) (set! nbuiltins (+ nbuiltins 1))
         (vector-set! m IDX-FN-STRING-LT (+ nimports nbuiltins)) (set! nbuiltins (+ nbuiltins 1))
         (vector-set! m IDX-FN-STRING-CI-EQ (+ nimports nbuiltins)) (set! nbuiltins (+ nbuiltins 1))
-        (vector-set! m IDX-FN-STRING-CI-LT (+ nimports nbuiltins)) (set! nbuiltins (+ nbuiltins 1)))
+        (vector-set! m IDX-FN-STRING-CI-LT (+ nimports nbuiltins)) (set! nbuiltins (+ nbuiltins 1))
+        (vector-set! m IDX-FN-STRING-FILL (+ nimports nbuiltins)) (set! nbuiltins (+ nbuiltins 1)))
       (when needs-read
         (vector-set! m IDX-FN-READ (+ nimports nbuiltins)) (set! nbuiltins (+ nbuiltins 1))
         (vector-set! m IDX-FN-READ-LIST (+ nimports nbuiltins)) (set! nbuiltins (+ nbuiltins 1))

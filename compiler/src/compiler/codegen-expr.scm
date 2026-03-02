@@ -212,6 +212,7 @@
 (define (ctx-fn-drop-input-stream ctx) (vector-ref ctx 110))
 (define (ctx-fn-drop-output-stream ctx) (vector-ref ctx 111))
 (define (ctx-fn-vector-fill ctx) (vector-ref ctx 112))
+(define (ctx-fn-string-fill ctx) (vector-ref ctx 113))
 (define (ctx-is-boxed? ctx name) (string-ht-has? (ctx-boxed-locals-hash ctx) name))
 
 (define (build-boxed-locals-hash lst)
@@ -349,7 +350,7 @@
                   fn-get-stdin fn-stream-read fn-get-directories
                   fn-open-at fn-read-via-stream fn-write-via-stream
                   fn-drop-descriptor fn-drop-input-stream fn-drop-output-stream
-                  fn-vector-fill)
+                  fn-vector-fill fn-string-fill)
   (vector locals nlocals globals funcs lambdas wrappers
           closure-arities nclosure-arity narity
           fn-display fn-newline fn-eqv fn-equal
@@ -391,7 +392,7 @@
           fn-get-stdin fn-stream-read fn-get-directories
           fn-open-at fn-read-via-stream fn-write-via-stream
           fn-drop-descriptor fn-drop-input-stream fn-drop-output-stream
-          fn-vector-fill))
+          fn-vector-fill fn-string-fill))
 
 (define (ctx-with-locals ctx locals nlocals)
   (let ((new-ctx (vector-copy ctx)))
@@ -1083,7 +1084,7 @@
           "integer->char" "eof-object?" "port?"
           "input-port?" "output-port?" "string?" "string-length" "string-ref"
           "string-set!" "make-string" "substring" "string-copy" "string->list"
-          "list->string" "string=?" "string<?" "string-ci=?" "string-ci<?"
+          "list->string" "string=?" "string<?" "string-ci=?" "string-ci<?" "string-fill!"
           "vector?" "vector-length" "vector-ref"
           "vector-set!" "make-vector" "vector" "vector-copy" "list->vector" "vector->list" "vector-fill!" "+"
           "-" "*" "/" "quotient" "remainder" "=" "<" ">" "<=" ">="
@@ -2421,6 +2422,7 @@
     ((and (string=? op-str "string<?") (= len 3)) (codegen-call-2! (ctx-fn-string-lt ctx) val body ctx))
     ((and (string=? op-str "string-ci=?") (= len 3)) (codegen-call-2! (ctx-fn-string-ci-eq ctx) val body ctx))
     ((and (string=? op-str "string-ci<?") (= len 3)) (codegen-call-2! (ctx-fn-string-ci-lt ctx) val body ctx))
+    ((and (string=? op-str "string-fill!") (= len 3)) (codegen-call-2! (ctx-fn-string-fill ctx) val body ctx))
 
     ((and (string=? op-str "vector?") (= len 2)) (codegen-type-pred! (ctx-ty-vector ctx) val body ctx))
 
