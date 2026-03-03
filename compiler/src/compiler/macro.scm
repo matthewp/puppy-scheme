@@ -364,9 +364,9 @@
 (define (instantiate tmpl bindings gensym-map macro-id introduced)
   (cond
     ((symbol? tmpl)
-     (let ((val (lookup-binding tmpl bindings)))
-       (if val
-           val
+     (let ((b (find-binding tmpl bindings)))
+       (if (and b (not (null? (binding-values b))))
+           (car (binding-values b))
            (if (known-form? tmpl)
                tmpl
                ;; Hygiene: only gensym symbols introduced in binding positions
