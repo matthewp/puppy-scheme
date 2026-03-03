@@ -24,7 +24,7 @@
 (include "codegen-expr.scm")
 (include "codegen.scm")
 
-(define puppy-version "0.0.3")
+(define puppy-version "0.0.4")
 
 (define (usage)
   (display "Usage: puppyc [options] <input.scm> [-o <output.wasm>]\n" (current-error-port))
