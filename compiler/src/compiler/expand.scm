@@ -416,7 +416,7 @@
   ;; (define (__rationalize-simplest lo hi)
   ;;   (cond ((= lo hi) lo)
   ;;         ((and (<= lo 0) (>= hi 0)) 0)
-  ;;         ((< hi 0) (- (__rationalize-simplest (- hi) (- lo))))
+  ;;         ((< hi 0) (- 0 (__rationalize-simplest (- 0 hi) (- 0 lo))))
   ;;         (else (let ((fl (floor lo)) (fh (floor hi)))
   ;;                 (if (< fl fh) (+ fl 1)
   ;;                   (+ fl (/ 1 (__rationalize-simplest (/ 1 (- hi fl)) (/ 1 (- lo fl))))))))))
@@ -427,7 +427,7 @@
                (list (list '= 'lo 'hi) 'lo)
                (list (list 'and (list '<= 'lo 0) (list '>= 'hi 0)) 0)
                (list (list '< 'hi 0)
-                     (list '- (list '__rationalize-simplest (list '- 'hi) (list '- 'lo))))
+                     (list '- 0 (list '__rationalize-simplest (list '- 0 'hi) (list '- 0 'lo))))
                (list 'else
                      (list 'let (list (list 'fl (list 'floor 'lo))
                                       (list 'fh (list 'floor 'hi)))
