@@ -1,0 +1,12 @@
+;; expect: 1 2 3 2 6 1
+(display (numerator 1/2))
+(display " ")
+(display (denominator 1/2))
+(display " ")
+(display (numerator 3/2))
+(display " ")
+(display (denominator 3/2))
+(display " ")
+(display (numerator 6))
+(display " ")
+(display (denominator 6))

@@ -6,6 +6,7 @@
 (define *hoisted* '())
 (define *needs-qq-append* #f)
 (define *needs-gcd* #f)
+(define *needs-rationalize* #f)
 
 (define *case-counter* 0)
 (define *or-counter* 0)
@@ -408,6 +409,42 @@
                 (list 'abs (list '* (list 'quotient na
                                           (list '__gcd na nb))
                                  nb))))))
+
+;;; --- rationalize desugaring ---
+
+(define (hoist-rationalize-helper!)
+  ;; (define (__rationalize-simplest lo hi)
+  ;;   (cond ((= lo hi) lo)
+  ;;         ((and (<= lo 0) (>= hi 0)) 0)
+  ;;         ((< hi 0) (- (__rationalize-simplest (- hi) (- lo))))
+  ;;         (else (let ((fl (floor lo)) (fh (floor hi)))
+  ;;                 (if (< fl fh) (+ fl 1)
+  ;;                   (+ fl (/ 1 (__rationalize-simplest (/ 1 (- hi fl)) (/ 1 (- lo fl))))))))))
+  ;; (define (__rationalize x delta) (__rationalize-simplest (- x delta) (+ x delta)))
+  (add-hoisted!
+   (list 'define (list '__rationalize-simplest 'lo 'hi)
+         (list 'cond
+               (list (list '= 'lo 'hi) 'lo)
+               (list (list 'and (list '<= 'lo 0) (list '>= 'hi 0)) 0)
+               (list (list '< 'hi 0)
+                     (list '- (list '__rationalize-simplest (list '- 'hi) (list '- 'lo))))
+               (list 'else
+                     (list 'let (list (list 'fl (list 'floor 'lo))
+                                      (list 'fh (list 'floor 'hi)))
+                           (list 'if (list '< 'fl 'fh)
+                                 (list '+ 'fl 1)
+                                 (list '+ 'fl
+                                       (list '/ 1
+                                             (list '__rationalize-simplest
+                                                   (list '/ 1 (list '- 'hi 'fl))
+                                                   (list '/ 1 (list '- 'lo 'fl)))))))))))
+  (add-hoisted!
+   (list 'define (list '__rationalize 'x 'delta)
+         (list '__rationalize-simplest (list '- 'x 'delta) (list '+ 'x 'delta)))))
+
+(define (desugar-rationalize form)
+  (set! *needs-rationalize* #t)
+  (list '__rationalize (cadr form) (caddr form)))
 
 ;;; --- for-each desugaring ---
 
@@ -824,6 +861,7 @@
           "newline" "values" "receive" "call-with-input-file" "call-with-output-file"
           "string" "string>?" "string<=?" "string>=?"
           "string-ci>?" "string-ci<=?" "string-ci>=?"
+          "rationalize"
           "+" "-" "*" "/" "apply" "delay" "force"))
       (set! *desugar-keywords* ht))))
 
@@ -892,6 +930,9 @@
           ((and (string=? op-str "lcm") (= (length form) 3))
            (let ((result (desugar-lcm form)))
              (expand-one result macros (+ depth 1))))
+
+          ((and (string=? op-str "rationalize") (= (length form) 3))
+           (desugar-rationalize form))
 
           ((and (string=? op-str "when") (>= (length form) 3))
            (let ((result (list 'if (cadr form) (cons 'begin (cddr form)))))
@@ -1227,6 +1268,7 @@
   (set! *hoisted* '())
   (set! *needs-qq-append* #f)
   (set! *needs-gcd* #f)
+  (set! *needs-rationalize* #f)
   (set! *case-counter* 0)
   (set! *or-counter* 0)
   (set! *letrec-counter* 0)
@@ -1260,6 +1302,8 @@
           (hoist-append-helper!))
       (if *needs-gcd*
           (hoist-gcd-helper!))
+      (if *needs-rationalize*
+          (hoist-rationalize-helper!))
 
       ;; Prepend hoisted forms (reversed since add-hoisted! uses cons)
       (append (reverse *hoisted*) expanded))))
