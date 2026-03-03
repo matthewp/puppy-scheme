@@ -213,6 +213,7 @@
 (define (ctx-fn-drop-output-stream ctx) (vector-ref ctx 111))
 (define (ctx-fn-vector-fill ctx) (vector-ref ctx 112))
 (define (ctx-fn-string-fill ctx) (vector-ref ctx 113))
+(define (ctx-ty-promise ctx) (vector-ref ctx 114))
 (define (ctx-is-boxed? ctx name) (string-ht-has? (ctx-boxed-locals-hash ctx) name))
 
 (define (build-boxed-locals-hash lst)
@@ -350,7 +351,8 @@
                   fn-get-stdin fn-stream-read fn-get-directories
                   fn-open-at fn-read-via-stream fn-write-via-stream
                   fn-drop-descriptor fn-drop-input-stream fn-drop-output-stream
-                  fn-vector-fill fn-string-fill)
+                  fn-vector-fill fn-string-fill
+                  ty-promise)
   (vector locals nlocals globals funcs lambdas wrappers
           closure-arities nclosure-arity narity
           fn-display fn-newline fn-eqv fn-equal
@@ -392,7 +394,8 @@
           fn-get-stdin fn-stream-read fn-get-directories
           fn-open-at fn-read-via-stream fn-write-via-stream
           fn-drop-descriptor fn-drop-input-stream fn-drop-output-stream
-          fn-vector-fill fn-string-fill))
+          fn-vector-fill fn-string-fill
+          ty-promise))
 
 (define (ctx-with-locals ctx locals nlocals)
   (let ((new-ctx (vector-copy ctx)))
@@ -1120,7 +1123,8 @@
           "%call-get-arguments" "%call-get-environment"
           "%call-get-stdin" "%call-stream-read" "%call-get-directories"
           "%call-open-at" "%call-read-via-stream" "%call-write-via-stream"
-          "%call-drop-descriptor" "%call-drop-input-stream" "%call-drop-output-stream"))
+          "%call-drop-descriptor" "%call-drop-input-stream" "%call-drop-output-stream"
+          "%make-promise" "%promise-ref" "%promise-set!" "%promise-state" "%promise-set-state!" "promise?"))
       (set! *codegen-ops* ht))))
 
 (define (codegen-op-dispatch op val len body ctx tail?)
@@ -3208,6 +3212,41 @@
                        (codegen-expr/tail (cadddr val) body ctx tail?)
                        (begin (emit-void! body) #t))
                    (wbuf-byte! body OP-END) #t)))))
+
+    ;; %make-promise (thunk) → struct.new $promise with state=0
+    ((and (string=? op-str "%make-promise") (= len 2))
+     (and (codegen-expr (cadr val) body ctx)
+          (begin
+            (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 0)
+            (wbuf-byte! body OP-GC-PREFIX) (wbuf-byte! body GC-STRUCT-NEW)
+            (wbuf-u32! body (ctx-ty-promise ctx)) #t)))
+
+    ;; %promise-ref (p) → get field 0 (value/thunk)
+    ((and (string=? op-str "%promise-ref") (= len 2))
+     (codegen-struct-get! (ctx-ty-promise ctx) 0 val body ctx))
+
+    ;; %promise-state (p) → get field 1 (i32 state), box as i31
+    ((and (string=? op-str "%promise-state") (= len 2))
+     (codegen-struct-get-i31! (ctx-ty-promise ctx) 1 val body ctx))
+
+    ;; %promise-set! (p v) → set field 0
+    ((and (string=? op-str "%promise-set!") (= len 3))
+     (codegen-struct-set-void! (ctx-ty-promise ctx) 0 val body ctx))
+
+    ;; %promise-set-state! (p v) → set field 1 (i32)
+    ((and (string=? op-str "%promise-set-state!") (= len 3))
+     (and (codegen-expr (cadr val) body ctx)
+          (begin
+            (emit-ref-cast! body (ctx-ty-promise ctx))
+            (and (codegen-i32-arg (caddr val) body ctx)
+                 (begin
+                   (wbuf-byte! body OP-GC-PREFIX) (wbuf-byte! body GC-STRUCT-SET)
+                   (wbuf-u32! body (ctx-ty-promise ctx)) (wbuf-u32! body 1)
+                   (emit-void! body) #t)))))
+
+    ;; promise? (x) → type predicate
+    ((and (string=? op-str "promise?") (= len 2))
+     (codegen-type-pred! (ctx-ty-promise ctx) val body ctx))
 
     ;; %call (fn-idx arg1 arg2 ...) → call function by raw index
     ((and (string=? op-str "%call") (>= len 2))

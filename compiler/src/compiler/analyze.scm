@@ -122,6 +122,9 @@
     "vector-copy" "list->vector" "vector->list" "vector?"
     "bitwise-and" "bitwise-ior" "arithmetic-shift"
     "set-car!" "set-cdr!"
+    "delay" "force" "promise?"
+    "%make-promise" "%promise-ref" "%promise-set!"
+    "%promise-state" "%promise-set-state!"
     "for-each" "append"
     "length" "map" "assq" "list-ref" "reverse" "list?" "memq" "memv" "member" "filter"
     "write" "exit"
@@ -184,7 +187,8 @@
 (define FLAG-UTF8-STRING 25)
 (define FLAG-GET-ENV 26)
 (define FLAG-EXIT 27)
-(define FLAG-COUNT 28)
+(define FLAG-PROMISE 28)
+(define FLAG-COUNT 29)
 
 (define (make-flags) (make-vector FLAG-COUNT #f))
 
@@ -304,7 +308,8 @@
 
 (define IDX-FN-VECTOR-FILL 113)
 (define IDX-FN-STRING-FILL 114)
-(define IDX-MAP-SIZE 115)
+(define IDX-TY-PROMISE 115)
+(define IDX-MAP-SIZE 116)
 
 ;; Hash table mapping builtin names to their flag index for O(1) scan
 (define *scan-ht*
@@ -421,7 +426,13 @@
         (cons "get-environment-variables" FLAG-GET-ENV)
         (cons "open-input-string" FLAG-FILE-IO)
         (cons "exit" FLAG-EXIT)
-        (cons "emergency-exit" FLAG-EXIT)))
+        (cons "emergency-exit" FLAG-EXIT)
+        (cons "%make-promise" FLAG-PROMISE)
+        (cons "%promise-ref" FLAG-PROMISE)
+        (cons "%promise-set!" FLAG-PROMISE)
+        (cons "%promise-state" FLAG-PROMISE)
+        (cons "%promise-set-state!" FLAG-PROMISE)
+        (cons "promise?" FLAG-PROMISE)))
     ht))
 
 ;;; --- Builtin dependency table ---
@@ -434,7 +445,7 @@
           "flonum" "rational" "complex" "math" "command-line" "string-append"
           "bytevector" "char" "symbol" "file-io" "string-ops" "read" "vector"
           "write" "clock" "apply" "file-exists" "bv-copy" "bv-append" "utf8-string" "get-env"
-          "exit"))
+          "exit" "promise"))
 
 (define *flag-name-ht*
   ;; name string → FLAG index
@@ -1304,6 +1315,7 @@
         (needs-utf8-string (vector-ref flags FLAG-UTF8-STRING))
         (needs-get-env (vector-ref flags FLAG-GET-ENV))
         (needs-exit (vector-ref flags FLAG-EXIT))
+        (needs-promise (vector-ref flags FLAG-PROMISE))
         (nimports (if *wit-world*
                       (length (wit-world-func-imports *wit-world*))
                       0))
@@ -1468,6 +1480,7 @@
           (vector-set! m IDX-TY-VOID-I32 offset) (set! offset (+ offset 1)))
         (when needs-clock
           (vector-set! m IDX-TY-VOID-I64 offset) (set! offset (+ offset 1)))
+        (when needs-promise (vector-set! m IDX-TY-PROMISE offset) (set! offset (+ offset 1)))
         (vector-set! m IDX-TY-VECTOR TY-ENV)
         (vector-set! m IDX-TY-USER-START offset))
 

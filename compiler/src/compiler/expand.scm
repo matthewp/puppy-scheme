@@ -34,6 +34,7 @@
 (define *take-counter* 0)
 (define *receive-counter* 0)
 (define *string-ctor-counter* 0)
+(define *promise-counter* 0)
 
 ;;; --- Hoisting ---
 
@@ -823,7 +824,7 @@
           "newline" "values" "receive" "call-with-input-file" "call-with-output-file"
           "string" "string>?" "string<=?" "string>=?"
           "string-ci>?" "string-ci<=?" "string-ci>=?"
-          "+" "-" "*" "/" "apply"))
+          "+" "-" "*" "/" "apply" "delay" "force"))
       (set! *desugar-keywords* ht))))
 
 (define (post-desugar form macros depth op-str)
@@ -1037,6 +1038,28 @@
           ((and (string=? op-str "-") (= (length form) 2))
            (expand-one (list '- 0 (cadr form)) macros (+ depth 1)))
 
+          ;; delay: (delay expr) → (%make-promise (lambda () expr))
+          ((and (string=? op-str "delay") (= (length form) 2))
+           (list '%make-promise (list 'lambda '() (cadr form))))
+
+          ;; force: (force expr) → inline check-and-memoize
+          ((and (string=? op-str "force") (= (length form) 2))
+           (let* ((n *promise-counter*)
+                  (pname (string->symbol (string-append "__p" (number->string n))))
+                  (tname (string->symbol (string-append "__t" (number->string n))))
+                  (vname (string->symbol (string-append "__v" (number->string n)))))
+             (set! *promise-counter* (+ n 1))
+             (expand-one
+               (list 'let (list (list pname (cadr form)))
+                 (list 'if (list '%i31-eqz (list '%promise-state pname))
+                   (list 'let (list (list tname (list '%promise-ref pname)))
+                     (list 'let (list (list vname (list tname)))
+                       (list '%promise-set! pname vname)
+                       (list '%promise-set-state! pname 1)
+                       vname))
+                   (list '%promise-ref pname)))
+               macros (+ depth 1))))
+
           (else form))))))
 
 ;;; --- Recursive expansion ---
@@ -1217,6 +1240,7 @@
   (set! *append-counter* 0)
   (set! *receive-counter* 0)
   (set! *string-ctor-counter* 0)
+  (set! *promise-counter* 0)
   (set! *macro-counter* 0)
 
   ;; Pass 1: collect macros

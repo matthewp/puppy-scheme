@@ -93,7 +93,7 @@ Building puppypack itself requires the wasmtime C API library and a one-time `ma
 - [x] Named `let`
 - [x] `when`
 - [x] `unless`
-- [ ] `delay` / `force`
+- [x] `delay` / `force`
 - [x] Quasiquote / `` ` `` / `,` / `,@`
 
 ### Definitions (5)

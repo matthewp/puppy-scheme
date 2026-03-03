@@ -151,6 +151,7 @@
          (needs-utf8-string (vector-ref flags FLAG-UTF8-STRING))
          (needs-get-env (vector-ref flags FLAG-GET-ENV))
          (needs-exit (vector-ref flags FLAG-EXIT))
+         (needs-promise (vector-ref flags FLAG-PROMISE))
          ;; Read derived booleans from index-map
          (needs-dispatch (vector-ref m IDX-NEEDS-DISPATCH))
          (needs-eqv-type (vector-ref m IDX-NEEDS-EQV-TYPE))
@@ -257,6 +258,7 @@
          (ty-str-3arg (vector-ref m IDX-TY-STR-3ARG))
          (ty-clock-import (vector-ref m IDX-TY-CLOCK-IMPORT))
          (ty-vector (vector-ref m IDX-TY-VECTOR))
+         (ty-promise (vector-ref m IDX-TY-PROMISE))
          (ty-user-start (vector-ref m IDX-TY-USER-START)))
 
       ;; Get pre-computed data from analysis
@@ -559,6 +561,12 @@
                   (when needs-clock
                     (wbuf-byte! sec TYPE-FUNC) (wbuf-u32! sec 0)
                     (wbuf-u32! sec 1) (wbuf-byte! sec TYPE-I64))
+
+                  ;; ty-promise: (struct (mut (ref null eq)) (mut i32))
+                  (when needs-promise
+                    (wbuf-byte! sec COMP-STRUCT) (wbuf-u32! sec 2)
+                    (wbuf-byte! sec REF-NULL-TYPE) (wbuf-byte! sec HT-EQ) (wbuf-byte! sec FIELD-MUT)
+                    (wbuf-byte! sec TYPE-I32) (wbuf-byte! sec FIELD-MUT))
 
                   ;; ty-vector now aliases TY-ENV (same shape), no separate type needed
 
@@ -934,7 +942,8 @@
                                                fn-get-stdin fn-stream-read fn-get-directories
                                                fn-open-at fn-read-via-stream fn-write-via-stream
                                                fn-drop-descriptor fn-drop-input-stream fn-drop-output-stream
-                                               fn-vector-fill fn-string-fill))
+                                               fn-vector-fill fn-string-fill
+                                               ty-promise))
                           (ok #t))
 
                       (let ((nstart-locals (count-let-locals forms)))
