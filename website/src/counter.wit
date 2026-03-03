@@ -1,7 +1,0 @@
-package puppy:website;
-
-world counter {
-  export render: func() -> u32;
-  export dispatch-handler: func(ptr: u32, len: u32);
-  export alloc: func(size: u32) -> u32;
-}
