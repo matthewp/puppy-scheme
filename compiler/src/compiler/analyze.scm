@@ -108,6 +108,7 @@
     "rational?" "##ratnum?" "##ratnum-numerator" "##ratnum-denominator"
     "##cpxnum?" "##cpxnum-real" "##cpxnum-imag"
     "make-rectangular" "real-part" "imag-part" "complex?"
+    "real?" "numerator" "denominator" "rationalize"
     "command-line" "string-append"
     "file-exists?" "open-input-file" "open-output-file"
     "close-input-port" "close-output-port"
@@ -327,6 +328,10 @@
         (cons "##ratnum?" FLAG-RATIONAL)
         (cons "##ratnum-numerator" FLAG-RATIONAL)
         (cons "##ratnum-denominator" FLAG-RATIONAL)
+        (cons "real?" FLAG-RATIONAL)
+        (cons "numerator" FLAG-RATIONAL)
+        (cons "denominator" FLAG-RATIONAL)
+        (cons "rationalize" FLAG-RATIONAL)
         (cons "##cpxnum?" FLAG-COMPLEX)
         (cons "##cpxnum-real" FLAG-COMPLEX)
         (cons "##cpxnum-imag" FLAG-COMPLEX)

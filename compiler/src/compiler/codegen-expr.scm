@@ -1092,9 +1092,9 @@
         '("let" "let*" "lambda" "set!" "if" "begin" "quote" "and" "or" "cond"
           "cons" "car" "cdr" "set-car!" "set-cdr!" "null?" "pair?" "symbol?"
           "symbol->string" "string->symbol" "list" "pointer->string" "not"
-          "boolean?" "number?" "complex?" "rational?" "integer?" "exact?"
+          "boolean?" "number?" "complex?" "rational?" "real?" "integer?" "exact?"
           "inexact?" "flonum?" "##ratnum?" "##cpxnum?" "##ratnum-numerator"
-          "##ratnum-denominator" "make-rectangular" "real-part" "##cpxnum-real"
+          "##ratnum-denominator" "numerator" "denominator" "make-rectangular" "real-part" "##cpxnum-real"
           "imag-part" "##cpxnum-imag" "exact->inexact" "inexact->exact" "floor"
           "ceiling" "truncate" "round" "sqrt" "exp" "log" "sin" "cos" "tan"
           "asin" "acos" "atan" "expt" "zero?" "positive?" "negative?" "odd?"
@@ -1640,6 +1640,112 @@
 
     ((and (string=? op-str "rational?") (= len 2))
      (codegen-i31-or-type-pred! (ctx-ty-rational ctx) val body ctx))
+
+    ((and (string=? op-str "real?") (= len 2))
+     ;; true for i31, flonum, rational — false for complex
+     (let ((has-fl (>= (ctx-ty-flonum ctx) 0))
+           (has-rat (>= (ctx-ty-rational ctx) 0)))
+       (if (or has-fl has-rat)
+           (let ((types '())
+                 (ntypes 0))
+             (when has-fl
+               (set! types (append types (list (ctx-ty-flonum ctx))))
+               (set! ntypes (+ ntypes 1)))
+             (when has-rat
+               (set! types (append types (list (ctx-ty-rational ctx))))
+               (set! ntypes (+ ntypes 1)))
+             (wbuf-byte! body OP-BLOCK) (wbuf-byte! body TYPE-I32)
+             (let loop ((t 0))
+               (when (< t ntypes)
+                 (wbuf-byte! body OP-BLOCK) (wbuf-byte! body HT-EQ)
+                 (loop (+ t 1))))
+             (let ((ok (codegen-expr (cadr val) body ctx)))
+               (when ok
+                 ;; i31 test
+                 (wbuf-byte! body OP-GC-PREFIX) (wbuf-byte! body GC-BR-ON-CAST-FAIL)
+                 (wbuf-byte! body #x01) (wbuf-u32! body 0)
+                 (wbuf-byte! body HT-EQ) (wbuf-byte! body HT-I31)
+                 (wbuf-byte! body OP-DROP)
+                 (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 1)
+                 (wbuf-byte! body OP-BR) (wbuf-u32! body ntypes)
+                 (wbuf-byte! body OP-END)
+                 ;; intermediate type tests
+                 (let loop ((t 0) (ts types))
+                   (when (< t (- ntypes 1))
+                     (wbuf-byte! body OP-GC-PREFIX) (wbuf-byte! body GC-BR-ON-CAST-FAIL)
+                     (wbuf-byte! body #x01) (wbuf-u32! body 0)
+                     (wbuf-byte! body HT-EQ) (wbuf-u32! body (car ts))
+                     (wbuf-byte! body OP-DROP)
+                     (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 1)
+                     (wbuf-byte! body OP-BR) (wbuf-u32! body (- ntypes 1 t))
+                     (wbuf-byte! body OP-END)
+                     (loop (+ t 1) (cdr ts))))
+                 ;; final type: ref.test
+                 (wbuf-byte! body OP-GC-PREFIX) (wbuf-byte! body GC-REF-TEST-NN)
+                 (wbuf-u32! body (list-ref types (- ntypes 1)))
+                 (wbuf-byte! body OP-END)
+                 (emit-box-bool! body))
+               ok))
+           ;; no flonum/rational: real? = integer?
+           (and (codegen-expr (cadr val) body ctx)
+                (begin
+                  (wbuf-byte! body OP-GC-PREFIX)
+                  (wbuf-byte! body GC-REF-TEST-NN)
+                  (wbuf-byte! body HT-I31)
+                  (emit-box-bool! body)
+                  #t)))))
+
+    ;; numerator: i31 → self; rational → field 0
+    ((and (string=? op-str "numerator") (= len 2))
+     (let ((has-rat (>= (ctx-ty-rational ctx) 0)))
+       (if (not has-rat)
+           (codegen-expr (cadr val) body ctx)
+           (begin
+             (wbuf-byte! body OP-BLOCK) (wbuf-byte! body HT-EQ)
+             (wbuf-byte! body OP-BLOCK) (wbuf-byte! body HT-EQ)
+             (let ((ok (codegen-expr (cadr val) body ctx)))
+               (when ok
+                 (wbuf-byte! body OP-GC-PREFIX) (wbuf-byte! body GC-BR-ON-CAST-FAIL)
+                 (wbuf-byte! body #x01) (wbuf-u32! body 0)
+                 (wbuf-byte! body HT-EQ) (wbuf-byte! body HT-I31)
+                 ;; IS i31: numerator = self
+                 (wbuf-byte! body OP-BR) (wbuf-u32! body 1)
+                 (wbuf-byte! body OP-END)
+                 ;; NOT i31: get rational numerator (field 0)
+                 (emit-cast-struct-get! body (ctx-ty-rational ctx) 0)
+                 (emit-box-fixnum! body)
+                 (wbuf-byte! body OP-END))
+               ok)))))
+
+    ;; denominator: i31 → 1; rational → field 1
+    ((and (string=? op-str "denominator") (= len 2))
+     (let ((has-rat (>= (ctx-ty-rational ctx) 0)))
+       (if (not has-rat)
+           ;; no rationals: denominator of integer is always 1
+           (and (codegen-expr (cadr val) body ctx)
+                (begin
+                  (wbuf-byte! body OP-DROP)
+                  (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 1)
+                  (emit-box-fixnum! body) #t))
+           (begin
+             (wbuf-byte! body OP-BLOCK) (wbuf-byte! body HT-EQ)
+             (wbuf-byte! body OP-BLOCK) (wbuf-byte! body HT-EQ)
+             (let ((ok (codegen-expr (cadr val) body ctx)))
+               (when ok
+                 (wbuf-byte! body OP-GC-PREFIX) (wbuf-byte! body GC-BR-ON-CAST-FAIL)
+                 (wbuf-byte! body #x01) (wbuf-u32! body 0)
+                 (wbuf-byte! body HT-EQ) (wbuf-byte! body HT-I31)
+                 ;; IS i31: denominator = 1
+                 (wbuf-byte! body OP-DROP)
+                 (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 1)
+                 (emit-box-fixnum! body)
+                 (wbuf-byte! body OP-BR) (wbuf-u32! body 1)
+                 (wbuf-byte! body OP-END)
+                 ;; NOT i31: get rational denominator (field 1)
+                 (emit-cast-struct-get! body (ctx-ty-rational ctx) 1)
+                 (emit-box-fixnum! body)
+                 (wbuf-byte! body OP-END))
+               ok)))))
 
     ((and (string=? op-str "integer?") (= len 2)) (codegen-type-pred! HT-I31 val body ctx))
 

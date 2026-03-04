@@ -131,7 +131,7 @@ Building puppypack itself requires the wasmtime C API library and a one-time `ma
 - [x] Exact rationals — `1/3`, `(/ 1 3)` → `1/3`, GCD normalization
 - [x] `rational?`
 - [x] Complex numbers — `3+4i`, `make-rectangular`, `real-part`, `imag-part`, `complex?`
-- [ ] `real?` `numerator` `denominator` `rationalize`
+- [x] `real?` `numerator` `denominator` `rationalize`
 - [x] Transcendental functions — `sqrt` `exp` `log` `sin` `cos` `tan` `asin` `acos` `atan` `expt`
 
 ### Standard Procedures — Booleans (6.3.1)
