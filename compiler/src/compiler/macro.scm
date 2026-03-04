@@ -31,7 +31,7 @@
 
 (define *known-forms*
   '(+ - * / = < > <= >=
-    display newline not boolean? eq? eqv? equal?
+    display newline not boolean? boolean=? eq? eqv? equal?
     number? integer? exact? inexact?
     zero? positive? negative? odd? even?
     abs quotient remainder modulo

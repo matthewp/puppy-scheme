@@ -1065,6 +1065,15 @@
           ((and (string=? op-str "string-ci>=?") (= (length form) 3))
            (expand-one (list 'not (list 'string-ci<? (cadr form) (caddr form))) macros (+ depth 1)))
 
+          ;; boolean=?: (boolean=? b1 b2) → (eq? b1 b2); n-ary → (and (eq? b1 b2) (boolean=? b2 ...))
+          ((and (string=? op-str "boolean=?") (>= (length form) 3))
+           (if (= (length form) 3)
+               (expand-one (list 'eq? (cadr form) (caddr form)) macros (+ depth 1))
+               (expand-one (list 'and
+                                 (list 'eq? (cadr form) (caddr form))
+                                 (cons 'boolean=? (cddr form)))
+                           macros (+ depth 1))))
+
           ;; n-ary arithmetic: left-fold (+ a b c) → (+ (+ a b) c)
           ((and (or (string=? op-str "+") (string=? op-str "-")
                     (string=? op-str "*") (string=? op-str "/"))

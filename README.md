@@ -138,7 +138,7 @@ Building puppypack itself requires the wasmtime C API library and a one-time `ma
 
 - [x] `not`
 - [x] `boolean?`
-- [ ] `boolean=?`
+- [x] `boolean=?`
 
 ### Standard Procedures — Pairs and Lists (6.3.2)
 
