@@ -3,9 +3,11 @@
 (define (open tag)       (list 'open tag))
 (define (close-tag)      (list 'close))
 (define (attr name val)  (list 'attr name val))
+(define (attr-slot name val) (list 'attr-slot name val))
 (define (text str)       (list 'text str))
 (define (slot str)       (list 'slot str))
 (define (event typ name) (list 'event typ name))
+(define (component id)   (list 'component id))
 
 ;;; html macro — produces nested opcode lists from S-expression HTML
 
@@ -15,34 +17,38 @@
      (flatten (html-node node)))))
 
 (define-syntax html-node
-  (syntax-rules (@ unquote)
+  (syntax-rules (@ unquote child)
     ((html-node (unquote expr))
      (list (slot expr)))
-    ((html-node (tag (@ attr ...) child ...))
+    ((html-node (child expr))
+     (list (component expr)))
+    ((html-node (tag (@ a ...) ch ...))
      (list (open (symbol->string 'tag))
-           (html-attrs attr ...)
-           (html-children child ...)
+           (html-attrs a ...)
+           (html-children ch ...)
            (close-tag)))
-    ((html-node (tag child ...))
+    ((html-node (tag ch ...))
      (list (open (symbol->string 'tag))
-           (html-children child ...)
+           (html-children ch ...)
            (close-tag)))
     ((html-node expr)
      (list (text expr)))))
 
 (define-syntax html-attrs
-  (syntax-rules (on)
+  (syntax-rules (on unquote)
     ((html-attrs) (list))
     ((html-attrs (on type handler) rest ...)
      (list (event type handler) (html-attrs rest ...)))
+    ((html-attrs (name (unquote expr)) rest ...)
+     (list (attr-slot (symbol->string 'name) expr) (html-attrs rest ...)))
     ((html-attrs (name val) rest ...)
      (list (attr (symbol->string 'name) val) (html-attrs rest ...)))))
 
 (define-syntax html-children
   (syntax-rules ()
     ((html-children) (list))
-    ((html-children child rest ...)
-     (list (html-node child) (html-children rest ...)))))
+    ((html-children ch rest ...)
+     (list (html-node ch) (html-children rest ...)))))
 
 ;;; Flatten nested opcode lists into a flat opcode list.
 ;;; Opcodes are lists starting with a symbol (open, close, attr, text).
@@ -104,6 +110,17 @@
                                 (string-append val "\"")))))
                         tag-stack
                         #t))
+            (if (eq? type 'attr-slot)
+                (let ((name (car (cdr op)))
+                      (val (car (cdr (cdr op)))))
+                  (loop rest
+                        (string-append result
+                          (string-append " "
+                            (string-append name
+                              (string-append "=\""
+                                (string-append val "\"")))))
+                        tag-stack
+                        #t))
             (if (eq? type 'text)
                 (loop rest
                       (string-append result
@@ -116,4 +133,24 @@
                         (string-append (if in-tag ">" "") (car (cdr op))))
                       tag-stack
                       #f)
-                (loop rest result tag-stack in-tag)))))))))))
+            (if (eq? type 'event)
+                (let ((etype (car (cdr op)))
+                      (handler (car (cdr (cdr op)))))
+                  (loop rest
+                        (string-append result
+                          (string-append " data-on-"
+                            (string-append etype
+                              (string-append "=\""
+                                (string-append handler "\"")))))
+                        tag-stack
+                        #t))
+            (if (eq? type 'component)
+                (let* ((type-id (car (cdr op)))
+                       (instance-id (create-instance type-id))
+                       (child-html (render-to-string (render-instance instance-id))))
+                  (loop rest
+                        (string-append result
+                          (string-append (if in-tag ">" "") child-html))
+                        tag-stack
+                        #f))
+                (loop rest result tag-stack in-tag))))))))))))))

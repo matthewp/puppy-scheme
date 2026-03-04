@@ -6,7 +6,7 @@
   '(("path")
     ("len" "i" "start" "plen" "ptr" "count" "dirhandle" "disc")
     ((set! len (%string-length path))
-     (if (if (%i31-gt len 0) (%i31-eqz (%i31-sub (%string-ref path 0) 47)) 0)
+     (if (if (%i31-gt len 0) (%i31-eqz (%i31-sub (%string-ref path 0) 47)) #f)
          (begin (set! start 1) (set! plen (%i31-sub len 1)))
          (begin (set! start 0) (set! plen len)))
      (set! i 0)
@@ -25,16 +25,16 @@
        (%loop-void
          (%br-if 1 (%i31-ge i count))
          (set! dirhandle (%mem-load32 (%i31-add ptr (%i31-mul i 12))))
-         (%call-open-at dirhandle 0 1024 plen 0 1 80)
-         (set! disc (%mem-load32 80))
+         (%call-open-at dirhandle 0 1024 plen 0 1 8)
+         (set! disc (%mem-load32 8))
          (%br-if 1 (%i31-eqz disc))
          (set! i (%i31-add i 1))
          (%br 0)))
      (if (%i31-eqz disc)
          (begin
-           (%call-read-via-stream (%mem-load32 84) 0 88)
-           (if (%i31-eqz (%mem-load32 88))
-               (%make-port (%mem-load32 92) 0 -1 (%ref-null) (%mem-load32 84))
+           (%call-read-via-stream (%mem-load32 12) 0 16)
+           (if (%i31-eqz (%mem-load32 16))
+               (%make-port (%mem-load32 20) 0 -1 (%ref-null) (%mem-load32 12))
                (%unreachable)))
          (%unreachable)))))
 
@@ -44,7 +44,7 @@
   '(("path")
     ("len" "i" "start" "plen" "ptr" "count" "dirhandle" "disc")
     ((set! len (%string-length path))
-     (if (if (%i31-gt len 0) (%i31-eqz (%i31-sub (%string-ref path 0) 47)) 0)
+     (if (if (%i31-gt len 0) (%i31-eqz (%i31-sub (%string-ref path 0) 47)) #f)
          (begin (set! start 1) (set! plen (%i31-sub len 1)))
          (begin (set! start 0) (set! plen len)))
      (set! i 0)
@@ -63,16 +63,16 @@
        (%loop-void
          (%br-if 1 (%i31-ge i count))
          (set! dirhandle (%mem-load32 (%i31-add ptr (%i31-mul i 12))))
-         (%call-open-at dirhandle 0 1024 plen 9 2 80)
-         (set! disc (%mem-load32 80))
+         (%call-open-at dirhandle 0 1024 plen 9 2 8)
+         (set! disc (%mem-load32 8))
          (%br-if 1 (%i31-eqz disc))
          (set! i (%i31-add i 1))
          (%br 0)))
      (if (%i31-eqz disc)
          (begin
-           (%call-write-via-stream (%mem-load32 84) 0 88)
-           (if (%i31-eqz (%mem-load32 88))
-               (%make-port (%mem-load32 92) 1 -1 (%ref-null) (%mem-load32 84))
+           (%call-write-via-stream (%mem-load32 12) 0 16)
+           (if (%i31-eqz (%mem-load32 16))
+               (%make-port (%mem-load32 20) 1 -1 (%ref-null) (%mem-load32 12))
                (%unreachable)))
          (%unreachable)))))
 
@@ -151,8 +151,8 @@
 (define rt-write-char
   '(("ch" "port")
     ()
-    ((%mem-store8 108 (%char-code ch))
-     (%stream-write (%port-fd port) 108 1 300)
+    ((%mem-store8 24 (%char-code ch))
+     (%stream-write (%port-fd port) 24 1 300)
      0)))
 
 ;; open-input-string: (str) → port

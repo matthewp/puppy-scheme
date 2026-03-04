@@ -1,4 +1,4 @@
-;; expect: 10011101
+;; expect: #t#f#f#t#t#t#f#t
 (display (string<? "abc" "abd"))
 (display (string<? "abd" "abc"))
 (display (string<? "abc" "abc"))

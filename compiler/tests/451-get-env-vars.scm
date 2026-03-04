@@ -1,2 +1,2 @@
-;; expect: 1
+;; expect: #t
 (display (list? (get-environment-variables)))

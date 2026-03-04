@@ -1,8 +1,8 @@
-;; expect: 0
-;; expect: 0
-;; expect: 0
-;; expect: 1
-;; expect: 1
+;; expect: #f
+;; expect: #f
+;; expect: #f
+;; expect: #t
+;; expect: #t
 ;; boolean? must handle non-i31 values without crashing
 (display (boolean? "hello"))
 (newline)

@@ -159,6 +159,14 @@
        ,io-1
        0))
 
+  ;; Boolean display
+  (define bool-display
+    `(if (%ref-eq val #f)
+         (begin (%mem-store8 48 35) (%mem-store8 49 102) ,(io 48 2) 0)
+         (if (%ref-eq val #t)
+             (begin (%mem-store8 48 35) (%mem-store8 49 116) ,(io 48 2) 0)
+             ,int-display)))
+
   ;; Build type dispatch chain (inside out)
   (let* ((base `(if (%char? val) ,char-display ,string-display))
          (base (if needs-complex  `(if (%complex? val)  ,complex-display  ,base) base))
@@ -175,6 +183,6 @@
            (if (%ref-is-null val)
                ,null-display
                (if (%i31? val)
-                   ,int-display
+                   ,bool-display
                    ,base))
            0)))))

@@ -1,7 +1,7 @@
 
 ;; wasi-dir: tests
-;; expect: 1
-;; expect: 0
+;; expect: #t
+;; expect: #f
 (let ((p (open-input-file "lib/empty.txt")))
   (let ((c (read-char p)))
     (display (eof-object? c))

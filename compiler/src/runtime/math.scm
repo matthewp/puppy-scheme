@@ -116,10 +116,10 @@
       (list `(begin
                (set! x ,conv)
                ,trig-reduce-expr
-               (if (%i31-and n 1)
+               (if (%i31-ne (%i31-and n 1) 0)
                    (set! result ,(kernel-cos-expr 'r 'z))
                    (set! result ,(kernel-sin-expr 'r 'z)))
-               (if (%i31-and n 2)
+               (if (%i31-ne (%i31-and n 2) 0)
                    (%f64-neg result)
                    result))))))
 
@@ -130,10 +130,10 @@
       (list `(begin
                (set! x ,conv)
                ,trig-reduce-expr
-               (if (%i31-and n 1)
+               (if (%i31-ne (%i31-and n 1) 0)
                    (set! result ,(kernel-sin-expr 'r 'z))
                    (set! result ,(kernel-cos-expr 'r 'z)))
-               (if (%i31-and (%i31-add n 1) 2)
+               (if (%i31-ne (%i31-and (%i31-add n 1) 2) 0)
                    (%f64-neg result)
                    result))))))
 
@@ -159,7 +159,7 @@
                ,trig-reduce-expr
                (set! t (%f64-add r (%f64-mul (%f64-mul r z)
                           ,(horner 'z T))))
-               (if (%i31-and n 1)
+               (if (%i31-ne (%i31-and n 1) 0)
                    (%f64-neg (%f64-div 1.0 t))
                    t))))))
 
@@ -322,9 +322,9 @@
                          (%block-void
                            (%loop-void
                              (%br-if 1 (%i31-eqz p))
-                             (if (%i31-and p 1)
-                                 (set! result (%call ,fl-mul result b))
-                                 0)
+                             (if (%i31-eqz (%i31-and p 1))
+                                 0
+                                 (set! result (%call ,fl-mul result b)))
                              (set! p (%i31-div-u p 2))
                              (set! b (%call ,fl-mul b b))
                              (%br 0)))

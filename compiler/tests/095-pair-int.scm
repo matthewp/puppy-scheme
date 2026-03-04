@@ -1,2 +1,2 @@
-;; expect: 0
+;; expect: #f
 (display (pair? 42))

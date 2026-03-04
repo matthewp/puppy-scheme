@@ -170,6 +170,14 @@
          ,io-1
          0)))
 
+  ;; Boolean write
+  (define bool-write
+    `(if (%ref-eq val #f)
+         (begin (%mem-store8 48 35) (%mem-store8 49 102) ,(io 48 2) 0)
+         (if (%ref-eq val #t)
+             (begin (%mem-store8 48 35) (%mem-store8 49 116) ,(io 48 2) 0)
+             ,int-write)))
+
   ;; Build type dispatch chain
   ;; write differs from display: it handles pairs and null,
   ;; quotes strings, and outputs #\x for chars
@@ -187,6 +195,6 @@
            (if (%ref-is-null val)
                ,null-write
                (if (%i31? val)
-                   ,int-write
+                   ,bool-write
                    ,base))
            0)))))

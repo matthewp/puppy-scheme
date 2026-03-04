@@ -1,4 +1,4 @@
-;; expect: 1231
+;; expect: 123#t
 (let ((l (list 1 2 3)))
   (display (car l))
   (display (car (cdr l)))

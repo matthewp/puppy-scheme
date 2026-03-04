@@ -97,8 +97,9 @@
                 (cond
                   ((eq? f64-op '%f64-eq)
                    `(begin ,extract-a ,extract-b
-                      (%i31-and (%call ,fl-numeq ar br)
-                                (%call ,fl-numeq ai bi))))
+                      (if (%call ,fl-numeq ar br)
+                          (%call ,fl-numeq ai bi)
+                          #f)))
                   ((or (eq? f64-op '%f64-add) (eq? f64-op '%f64-sub))
                    (let ((fl-off (if (eq? f64-op '%f64-add) fl-add fl-sub)))
                      `(begin ,extract-a ,extract-b
@@ -190,14 +191,14 @@
   (define slow-path
     (let* ((base (cond
                    ((and needs-flonum needs-rational)
-                    `(if (%i31-or (%flonum? a) (%flonum? b))
+                    `(if (if (%flonum? a) #t (%flonum? b))
                          ,flonum-path
                          ,rational-path))
                    (needs-flonum flonum-path)
                    (needs-rational rational-path)
                    (else '(%unreachable)))))
       (if needs-complex
-          `(if (%i31-or (%complex? a) (%complex? b))
+          `(if (if (%complex? a) #t (%complex? b))
                ,complex-path
                ,base)
           base)))
@@ -214,7 +215,7 @@
       ls))
 
   (list '("a" "b") extra-locals
-    (list `(if (%i31-and (%i31? a) (%i31? b))
+    (list `(if (if (%i31? a) (%i31? b) #f)
                ,fixnum-path
                ,slow-path))))
 

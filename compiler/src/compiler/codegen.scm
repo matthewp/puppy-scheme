@@ -962,14 +962,14 @@
                               (cond
                                 ((or (is-func-define? form) (is-external-define? form))
                                  (when is-last
-                                   (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 0) (emit-box-i31! body)))
+                                   (emit-void! body)))
                                 ((is-var-define? form)
                                  (set! ok (codegen-expr (caddr form) body start-ctx))
                                  (when ok
                                    (let ((gidx (ctx-global start-ctx (symbol->string (cadr form)))))
                                      (wbuf-byte! body OP-GLOBAL-SET) (wbuf-u32! body gidx))
                                    (when is-last
-                                     (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 0) (emit-box-i31! body))))
+                                     (emit-void! body))))
                                 (else
                                  (set! ok (codegen-expr form body start-ctx))
                                  (when (and ok (not is-last))
@@ -1422,7 +1422,7 @@
                                                        (wbuf-byte! ubody OP-LOCAL-GET) (wbuf-u32! ubody j)
                                                        (cond
                                                          ((= (car pts) TYPE-I32)
-                                                          (emit-box-i31! ubody))
+                                                          (emit-box-fixnum! ubody))
                                                          ((= (car pts) TYPE-F64)
                                                           (emit-box-f64! ubody ty-flonum)))
                                                        (loop (+ j 1) (cdr pts))))
@@ -1432,7 +1432,7 @@
                                                      ((= (ext-return-type ext-match) 0)
                                                       (wbuf-byte! ubody OP-DROP))
                                                      ((= (ext-return-type ext-match) TYPE-I32)
-                                                      (emit-unbox-i31! ubody))
+                                                      (emit-unbox-fixnum! ubody))
                                                      ((= (ext-return-type ext-match) TYPE-F64)
                                                       (emit-unbox-f64! ubody ty-flonum)))
                                                    (wbuf-byte! ubody OP-END)
@@ -1523,7 +1523,7 @@
                                                                      ;; Non-string param: unbox i31
                                                                      (begin
                                                                        (wbuf-byte! ubody OP-LOCAL-GET) (wbuf-u32! ubody i)
-                                                                       (emit-unbox-i31! ubody)
+                                                                       (emit-unbox-fixnum! ubody)
                                                                        (loop (+ i 1) (cdr ps) str-idx)))))
                                                              ;; Call the lowered import
                                                              (wbuf-byte! ubody OP-CALL) (wbuf-u32! ubody import-idx)
@@ -1532,11 +1532,9 @@
                                                                  (if (wit-type-needs-memory? result)
                                                                      ;; String result: convert (ptr, len) to GC string
                                                                      ;; TODO: implement string return from imports
-                                                                     (emit-box-i31! ubody)
-                                                                     (emit-box-i31! ubody))
-                                                                 (begin
-                                                                   (wbuf-byte! ubody OP-I32-CONST) (wbuf-i32! ubody 0)
-                                                                   (emit-box-i31! ubody)))
+                                                                     (emit-box-fixnum! ubody)
+                                                                     (emit-box-fixnum! ubody))
+                                                                 (emit-void! ubody))
                                                              (wbuf-byte! ubody OP-END)
                                                              (wbuf-func-body! sec ubody))
                                                            (begin
@@ -1704,7 +1702,7 @@
                                                  (begin
                                                    (wbuf-byte! sbody OP-LOCAL-GET)
                                                    (wbuf-u32! sbody flat-i)
-                                                   (emit-box-i31! sbody)
+                                                   (emit-box-fixnum! sbody)
                                                    (loop (+ flat-i 1) (cdr ps) str-idx)))))
                                          ;; Call user function
                                          (wbuf-byte! sbody OP-CALL)
@@ -1758,7 +1756,7 @@
                                                    ;; Return ptr, len
                                                    (wbuf-byte! sbody OP-LOCAL-GET) (wbuf-u32! sbody local-ptr)
                                                    (wbuf-byte! sbody OP-LOCAL-GET) (wbuf-u32! sbody local-len))
-                                                 (emit-unbox-i31! sbody))
+                                                 (emit-unbox-fixnum! sbody))
                                              (wbuf-byte! sbody OP-DROP))
                                          (wbuf-byte! sbody OP-END)
                                          (wbuf-func-body! sec sbody)))

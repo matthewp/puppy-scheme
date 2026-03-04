@@ -1,6 +1,6 @@
 
 ;; wasi-dir: tests
-;; expect: 1 3+4i 1 0-1i
+;; expect: #t 3+4i #t 0-1i
 (call-with-input-file "data/complex.txt"
   (lambda (port)
     (let ((a (read port)))

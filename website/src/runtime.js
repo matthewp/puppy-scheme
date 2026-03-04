@@ -1,9 +1,13 @@
-export function createHost(container) {
-  function mount(renderer) {
+export function createHost(container, wasm) {
+  function mount(typeId) {
+    container.innerHTML = '';
+    const instanceId = wasm.create(typeId);
     const comp = {
-      renderer,
+      instanceId,
       mountPoint: container,
       slots: [],
+      attrSlots: [],
+      children: [],
       initialized: false,
     };
     renderComponent(comp);
@@ -11,13 +15,9 @@ export function createHost(container) {
   }
 
   function renderComponent(comp) {
-    const opcodes = comp.renderer.render();
+    const opcodes = wasm.render(comp.instanceId);
     if (!comp.initialized) {
-      if (comp.mountPoint.childNodes.length > 0) {
-        hydrateDOM(opcodes, comp, comp.mountPoint);
-      } else {
-        buildDOM(opcodes, comp, comp.mountPoint);
-      }
+      buildDOM(opcodes, comp, comp.mountPoint);
       comp.initialized = true;
     } else {
       updateDOM(opcodes, comp);
@@ -45,6 +45,10 @@ export function createHost(container) {
         case 'attr':
           element.setAttribute(op.val[0], op.val[1]);
           break;
+        case 'attr-slot':
+          element.setAttribute(op.val[0], op.val[1]);
+          comp.attrSlots.push({ element, name: op.val[0] });
+          break;
         case 'text':
           current.appendChild(document.createTextNode(op.val));
           break;
@@ -56,55 +60,28 @@ export function createHost(container) {
         }
         case 'event': {
           const [eventType, handlerName] = op.val;
+          const targetComp = comp;
           element.addEventListener(eventType, () => {
-            comp.renderer.handleEvent(handlerName);
-            renderComponent(comp);
+            wasm.dispatch(targetComp.instanceId, handlerName);
+            renderComponent(targetComp);
           });
           break;
         }
-      }
-    }
-  }
-
-  function hydrateDOM(opcodes, comp, parent) {
-    const stack = [];
-    let current = parent;
-    let childIdx = 0;
-    let element = null;
-
-    for (const op of opcodes) {
-      switch (op.tag) {
-        case 'open': {
-          const el = current.childNodes[childIdx];
-          stack.push({ node: current, idx: childIdx });
-          current = el;
-          element = el;
-          childIdx = 0;
-          break;
-        }
-        case 'close': {
-          const frame = stack.pop();
-          current = frame.node;
-          childIdx = frame.idx + 1;
-          break;
-        }
-        case 'attr':
-          break;
-        case 'text':
-          childIdx++;
-          break;
-        case 'slot': {
-          const node = current.childNodes[childIdx];
-          comp.slots.push(node);
-          childIdx++;
-          break;
-        }
-        case 'event': {
-          const [eventType, handlerName] = op.val;
-          element.addEventListener(eventType, () => {
-            comp.renderer.handleEvent(handlerName);
-            renderComponent(comp);
-          });
+        case 'component': {
+          const childTypeId = op.val;
+          const childInstanceId = wasm.create(childTypeId);
+          const childComp = {
+            instanceId: childInstanceId,
+            mountPoint: current,
+            slots: [],
+            attrSlots: [],
+            children: [],
+            initialized: false,
+          };
+          const childOpcodes = wasm.render(childInstanceId);
+          buildDOM(childOpcodes, childComp, current);
+          childComp.initialized = true;
+          comp.children.push(childComp);
           break;
         }
       }
@@ -113,11 +90,17 @@ export function createHost(container) {
 
   function updateDOM(opcodes, comp) {
     let slotIdx = 0;
+    let attrSlotIdx = 0;
     for (const op of opcodes) {
       if (op.tag === 'slot') {
         const node = comp.slots[slotIdx++];
         if (node.textContent !== op.val) {
           node.textContent = op.val;
+        }
+      } else if (op.tag === 'attr-slot') {
+        const entry = comp.attrSlots[attrSlotIdx++];
+        if (entry.element.getAttribute(entry.name) !== op.val[1]) {
+          entry.element.setAttribute(entry.name, op.val[1]);
         }
       }
     }

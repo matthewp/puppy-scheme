@@ -1,4 +1,4 @@
-;; expect: 1 1 0 1 0 1
+;; expect: #t #t #f #t #f #t
 (display (number? 1.5))
 (display " ")
 (display (number? 42))

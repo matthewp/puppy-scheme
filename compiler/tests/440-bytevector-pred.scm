@@ -1,6 +1,6 @@
-;; expect: 1
-;; expect: 0
-;; expect: 0
+;; expect: #t
+;; expect: #f
+;; expect: #f
 (display (bytevector? (make-bytevector 3)))
 (newline)
 (display (bytevector? "hi"))

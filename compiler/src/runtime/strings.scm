@@ -87,18 +87,20 @@
                  (%br-if 1 (%i31-ge i len))
                  (%br-if 1 (%i31-eqz valid))
                  (set! ch (%string-ref arr i))
-                 (if (%i31-or (%i31-lt ch 48) (%i31-gt ch 57))
+                 (if (%i31-lt ch 48)
                      (set! valid 0)
-                     (begin
-                       (set! result (%i31-add (%i31-mul result 10)
-                                              (%i31-sub ch 48)))
-                       (set! i (%i31-add i 1))))
+                     (if (%i31-gt ch 57)
+                         (set! valid 0)
+                         (begin
+                           (set! result (%i31-add (%i31-mul result 10)
+                                                  (%i31-sub ch 48)))
+                           (set! i (%i31-add i 1)))))
                  (%br 0)))))
        (if (%i31-ne valid 0)
            (if (%i31-ne is-neg 0)
                (%i31-neg result)
                result)
-           0)))))
+           #f)))))
 
 (define rt-substring
   '(("str" "start" "end")
@@ -170,7 +172,7 @@
     ("len" "i" "result")
     ((set! len (%string-length a))
      (if (%i31-ne len (%string-length b))
-         0
+         #f
          (begin
            (set! result 1)
            (set! i 0)
@@ -183,7 +185,7 @@
                    0)
                (set! i (%i31-add i 1))
                (%br 0)))
-           result)))))
+           (%i31-ne result 0))))))
 
 (define rt-string-lt
   '(("a" "b")
@@ -207,14 +209,14 @@
          (%br-if 1 done)
          (set! i (%i31-add i 1))
          (%br 0)))
-     (if done result (if (%i31-lt len-a len-b) 1 0)))))
+     (if (%i31-ne done 0) (%i31-ne result 0) (%i31-lt len-a len-b)))))
 
 (define rt-string-ci-eq
   '(("a" "b")
     ("len" "i" "result")
     ((set! len (%string-length a))
      (if (%i31-ne len (%string-length b))
-         0
+         #f
          (begin
            (set! result 1)
            (set! i 0)
@@ -228,7 +230,7 @@
                    0)
                (set! i (%i31-add i 1))
                (%br 0)))
-           result)))))
+           (%i31-ne result 0))))))
 
 (define rt-string-fill
   '(("s" "ch")
@@ -266,4 +268,4 @@
          (%br-if 1 done)
          (set! i (%i31-add i 1))
          (%br 0)))
-     (if done result (if (%i31-lt len-a len-b) 1 0)))))
+     (if (%i31-ne done 0) (%i31-ne result 0) (%i31-lt len-a len-b)))))

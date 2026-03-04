@@ -12,6 +12,8 @@
 (define TAG-TEXT 3)
 (define TAG-SLOT 4)
 (define TAG-EVENT 5)
+(define TAG-ATTR-SLOT 6)
+(define TAG-COMPONENT 7)
 
 ;; Return area for (array-ptr, count) pair
 (define ret-area (make-bytevector 8))
@@ -58,7 +60,13 @@
           (if (eq? type 'event)
               (begin (write-opcode! bv idx TAG-EVENT (string->mem (cadr op)) (string->mem (caddr op)))
                      (write-opcodes! bv (+ idx 1) rest))
-              (write-opcodes! bv idx rest)))))))))))
+          (if (eq? type 'attr-slot)
+              (begin (write-opcode! bv idx TAG-ATTR-SLOT (string->mem (cadr op)) (string->mem (caddr op)))
+                     (write-opcodes! bv (+ idx 1) rest))
+          (if (eq? type 'component)
+              (begin (write-opcode! bv idx TAG-COMPONENT (cons (cadr op) 0) no-string)
+                     (write-opcodes! bv (+ idx 1) rest))
+              (write-opcodes! bv idx rest)))))))))))))
 
 ;; Serialize opcode list -> pointer to (array-ptr, count) pair
 (define (serialize-opcodes opcodes)

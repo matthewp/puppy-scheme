@@ -1,6 +1,6 @@
 
 ;; wasi-dir: tests
-;; expect: ... 1
+;; expect: ... #t
 (call-with-input-file "data/ellipsis.txt"
   (lambda (port)
     (let ((val (read port)))

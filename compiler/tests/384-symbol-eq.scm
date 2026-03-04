@@ -1,4 +1,4 @@
-;; expect: 1100
+;; expect: #t#t#f#f
 ;; eq? on symbols must work — same-name symbols must be eq?
 (display (eq? 'foo 'foo))
 (display (eq? 'bar 'bar))

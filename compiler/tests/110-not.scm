@@ -1,5 +1,5 @@
-;; expect: 1
-;; expect: 0
+;; expect: #t
+;; expect: #f
 (display (not #f))
 (newline)
 (display (not #t))

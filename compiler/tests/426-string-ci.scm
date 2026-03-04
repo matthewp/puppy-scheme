@@ -1,4 +1,4 @@
-;; expect: 11001101
+;; expect: #t#t#f#f#t#t#f#t
 (display (string-ci=? "Hello" "hello"))
 (display (string-ci<? "ABC" "abd"))
 (display (string-ci<? "abd" "ABC"))
