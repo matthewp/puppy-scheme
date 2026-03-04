@@ -1684,7 +1684,7 @@
                  (wbuf-byte! body OP-GC-PREFIX) (wbuf-byte! body GC-REF-TEST-NN)
                  (wbuf-u32! body (list-ref types (- ntypes 1)))
                  (wbuf-byte! body OP-END)
-                 (emit-box-i31! body))
+                 (emit-box-bool! body))
                ok))
            ;; no flonum/rational: real? = integer?
            (and (codegen-expr (cadr val) body ctx)
@@ -1692,7 +1692,7 @@
                   (wbuf-byte! body OP-GC-PREFIX)
                   (wbuf-byte! body GC-REF-TEST-NN)
                   (wbuf-byte! body HT-I31)
-                  (emit-box-i31! body)
+                  (emit-box-bool! body)
                   #t)))))
 
     ;; numerator: i31 → self; rational → field 0
@@ -1713,7 +1713,7 @@
                  (wbuf-byte! body OP-END)
                  ;; NOT i31: get rational numerator (field 0)
                  (emit-cast-struct-get! body (ctx-ty-rational ctx) 0)
-                 (emit-box-i31! body)
+                 (emit-box-fixnum! body)
                  (wbuf-byte! body OP-END))
                ok)))))
 
@@ -1726,7 +1726,7 @@
                 (begin
                   (wbuf-byte! body OP-DROP)
                   (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 1)
-                  (emit-box-i31! body) #t))
+                  (emit-box-fixnum! body) #t))
            (begin
              (wbuf-byte! body OP-BLOCK) (wbuf-byte! body HT-EQ)
              (wbuf-byte! body OP-BLOCK) (wbuf-byte! body HT-EQ)
@@ -1738,12 +1738,12 @@
                  ;; IS i31: denominator = 1
                  (wbuf-byte! body OP-DROP)
                  (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 1)
-                 (emit-box-i31! body)
+                 (emit-box-fixnum! body)
                  (wbuf-byte! body OP-BR) (wbuf-u32! body 1)
                  (wbuf-byte! body OP-END)
                  ;; NOT i31: get rational denominator (field 1)
                  (emit-cast-struct-get! body (ctx-ty-rational ctx) 1)
-                 (emit-box-i31! body)
+                 (emit-box-fixnum! body)
                  (wbuf-byte! body OP-END))
                ok)))))
 
