@@ -861,6 +861,7 @@
           "newline" "values" "receive" "call-with-input-file" "call-with-output-file"
           "string" "string>?" "string<=?" "string>=?"
           "string-ci>?" "string-ci<=?" "string-ci>=?"
+          "boolean=?"
           "rationalize"
           "+" "-" "*" "/" "apply" "delay" "force"))
       (set! *desugar-keywords* ht))))
