@@ -1099,7 +1099,8 @@
           "ceiling" "truncate" "round" "sqrt" "exp" "log" "sin" "cos" "tan"
           "asin" "acos" "atan" "expt" "zero?" "positive?" "negative?" "odd?"
           "even?" "eq?" "eqv?" "equal?" "number->string" "string->number" "display"
-          "write" "current-error-port" "newline" "exit" "string-append"
+          "write" "current-error-port" "current-output-port" "current-input-port"
+          "newline" "exit" "string-append"
           "command-line" "current-milliseconds" "linear-alloc" "make-bytevector"
           "bytevector-length" "bytevector-u8-ref" "bytevector-u8-set!"
           "bytevector-u32-native-ref" "bytevector-u32-native-set!"
@@ -1939,6 +1940,16 @@
            (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 2)
            (emit-box-fixnum! body) #t)))
 
+    ;; current-output-port — P2: call get-stdout, P1: return boxed fd 1
+    ((and (string=? op-str "current-output-port") (= len 1))
+     (if (>= (ctx-fn-get-stdout ctx) 0)
+         (begin
+           (wbuf-byte! body OP-CALL) (wbuf-u32! body (ctx-fn-get-stdout ctx))
+           (emit-box-fixnum! body) #t)
+         (begin
+           (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 1)
+           (emit-box-fixnum! body) #t)))
+
     ;; newline
     ((and (string=? op-str "newline") (= len 1))
      (wbuf-byte! body OP-CALL)
@@ -2269,6 +2280,21 @@
     ((and (string=? op-str "close-output-port") (= len 2)) (codegen-call-1! (ctx-fn-close-port ctx) val body ctx))
     ((and (string=? op-str "read-char") (= len 2)) (codegen-call-1! (ctx-fn-read-char-fn ctx) val body ctx))
     ((and (string=? op-str "peek-char") (= len 2)) (codegen-call-1! (ctx-fn-peek-char-fn ctx) val body ctx))
+
+    ;; current-input-port — P2: call get-stdin, wrap in port struct; P1: return boxed fd 0
+    ((and (string=? op-str "current-input-port") (= len 1))
+     (if (>= (ctx-fn-get-stdin ctx) 0)
+         (begin
+           (wbuf-byte! body OP-CALL) (wbuf-u32! body (ctx-fn-get-stdin ctx))
+           (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 0)
+           (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body -1)
+           (wbuf-byte! body OP-REF-NULL) (wbuf-byte! body HT-EQ)
+           (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body -1)
+           (wbuf-byte! body OP-GC-PREFIX) (wbuf-byte! body GC-STRUCT-NEW)
+           (wbuf-u32! body (ctx-ty-port ctx)) #t)
+         (begin
+           (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 0)
+           (emit-box-fixnum! body) #t)))
 
     ((and (string=? op-str "write-char") (= len 3)) (codegen-call-2! (ctx-fn-write-char-fn ctx) val body ctx))
     ((and (string=? op-str "read") (= len 2)) (codegen-call-1! (ctx-fn-read ctx) val body ctx))
