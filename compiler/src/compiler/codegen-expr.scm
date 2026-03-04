@@ -33,13 +33,37 @@
   (wbuf-byte! b OP-GC-PREFIX)
   (wbuf-byte! b GC-I31-GET-S))
 
+(define (emit-box-fixnum! b)
+  ;; i32 on stack → shl 1 → ref.i31 (tag-bit encoding: fixnums are even)
+  (wbuf-byte! b OP-I32-CONST) (wbuf-i32! b 1)
+  (wbuf-byte! b OP-I32-SHL)
+  (emit-box-i31! b))
+
+(define (emit-unbox-fixnum! b)
+  ;; eqref → ref.cast i31 → i31.get_s → shr_s 1 → i32
+  (wbuf-byte! b OP-GC-PREFIX)
+  (wbuf-byte! b GC-REF-CAST)
+  (wbuf-byte! b HT-I31)
+  (wbuf-byte! b OP-GC-PREFIX)
+  (wbuf-byte! b GC-I31-GET-S)
+  (wbuf-byte! b OP-I32-CONST) (wbuf-i32! b 1)
+  (wbuf-byte! b OP-I32-SHR-S))
+
+(define (emit-box-bool! b)
+  ;; i32 0/1 → (x << 1) | 1 → ref.i31 (maps 0→1=#f, 1→3=#t)
+  (wbuf-byte! b OP-I32-CONST) (wbuf-i32! b 1)
+  (wbuf-byte! b OP-I32-SHL)
+  (wbuf-byte! b OP-I32-CONST) (wbuf-i32! b 1)
+  (wbuf-byte! b OP-I32-OR)
+  (emit-box-i31! b))
+
 (define (emit-truthy-test! b)
   ;; Safe truthiness test for any eqref value on the stack.
-  ;; Produces i32: 0 if #f (i31 0), non-zero otherwise.
+  ;; Produces i32: 0 if #f (i31 1), non-zero otherwise.
   ;; Handles strings, pairs, etc. without crashing.
   (wbuf-byte! b OP-I32-CONST)
-  (wbuf-i32! b 0)
-  (emit-box-i31! b)            ;; push #f = (i31 0)
+  (wbuf-i32! b 1)
+  (emit-box-i31! b)            ;; push #f = (i31 1)
   (wbuf-byte! b OP-REF-EQ)    ;; compare: 1 if value is #f, 0 otherwise
   (wbuf-byte! b OP-I32-EQZ))  ;; negate: 0 if #f, 1 otherwise
 
@@ -74,7 +98,7 @@
   (if (and (integer? val) (exact? val))
       (begin (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body val) #t)
       (and (codegen-expr val body ctx)
-           (begin (emit-unbox-i31! body) #t))))
+           (begin (emit-unbox-fixnum! body) #t))))
 
 (define (codegen-f64-arg val body ctx)
   ;; Compile val to leave an f64 on the stack
@@ -84,7 +108,7 @@
            (begin (emit-unbox-f64! body (ctx-ty-flonum ctx)) #t))))
 
 (define (emit-void! body)
-  (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 0)
+  (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 7)
   (emit-box-i31! body))
 
 ;;; --- Ctx accessors ---
@@ -460,15 +484,16 @@
 
 (define (codegen-quote val body ctx)
   (cond
-    ;; Integer or boolean
-    ((and (integer? val) (exact? val))
-     (wbuf-byte! body OP-I32-CONST)
-     (wbuf-i32! body val)
-     (emit-box-i31! body)
-     #t)
+    ;; Boolean (must come before integer — booleans are i31 too)
     ((boolean? val)
      (wbuf-byte! body OP-I32-CONST)
-     (wbuf-i32! body (if val 1 0))
+     (wbuf-i32! body (if val 3 1))
+     (emit-box-i31! body)
+     #t)
+    ;; Integer
+    ((and (integer? val) (exact? val))
+     (wbuf-byte! body OP-I32-CONST)
+     (wbuf-i32! body (* val 2))
      (emit-box-i31! body)
      #t)
     ;; Flonum
@@ -589,17 +614,17 @@
 
 (define (codegen-expr/tail val body ctx tail?)
   (cond
-    ;; Integer literal
-    ((and (integer? val) (exact? val))
+    ;; Boolean literal (must come before integer — booleans are i31 too)
+    ((boolean? val)
      (wbuf-byte! body OP-I32-CONST)
-     (wbuf-i32! body val)
+     (wbuf-i32! body (if val 3 1))
      (emit-box-i31! body)
      #t)
 
-    ;; Boolean literal
-    ((boolean? val)
+    ;; Integer literal
+    ((and (integer? val) (exact? val))
      (wbuf-byte! body OP-I32-CONST)
-     (wbuf-i32! body (if val 1 0))
+     (wbuf-i32! body (* val 2))
      (emit-box-i31! body)
      #t)
 
@@ -811,10 +836,15 @@
 
 ;;; --- Codegen helpers for common patterns ---
 
-(define (codegen-binary-i31! opcode val body ctx)
+(define (codegen-binary-fixnum! opcode val body ctx)
   (and (codegen-i32-arg (cadr val) body ctx)
        (codegen-i32-arg (caddr val) body ctx)
-       (begin (wbuf-byte! body opcode) (emit-box-i31! body) #t)))
+       (begin (wbuf-byte! body opcode) (emit-box-fixnum! body) #t)))
+
+(define (codegen-binary-bool! opcode val body ctx)
+  (and (codegen-i32-arg (cadr val) body ctx)
+       (codegen-i32-arg (caddr val) body ctx)
+       (begin (wbuf-byte! body opcode) (emit-box-bool! body) #t)))
 
 (define (codegen-binary-f64! opcode val body ctx)
   (and (codegen-f64-arg (cadr val) body ctx)
@@ -830,14 +860,14 @@
 (define (codegen-f64-cmp! opcode val body ctx)
   (and (codegen-f64-arg (cadr val) body ctx)
        (codegen-f64-arg (caddr val) body ctx)
-       (begin (wbuf-byte! body opcode) (emit-box-i31! body) #t)))
+       (begin (wbuf-byte! body opcode) (emit-box-bool! body) #t)))
 
 (define (codegen-type-pred! type-idx val body ctx)
   (and (codegen-expr (cadr val) body ctx)
        (begin
          (wbuf-byte! body OP-GC-PREFIX) (wbuf-byte! body GC-REF-TEST-NN)
          (wbuf-u32! body type-idx)
-         (emit-box-i31! body) #t)))
+         (emit-box-bool! body) #t)))
 
 (define (codegen-struct-get! type-idx field-idx val body ctx)
   (and (codegen-expr (cadr val) body ctx)
@@ -860,7 +890,7 @@
 
 (define (codegen-struct-get-i31! type-idx field-idx val body ctx)
   (and (codegen-struct-get! type-idx field-idx val body ctx)
-       (begin (emit-box-i31! body) #t)))
+       (begin (emit-box-fixnum! body) #t)))
 
 (define (codegen-struct-set-void! type-idx field-idx val body ctx)
   (and (codegen-expr (cadr val) body ctx)
@@ -877,7 +907,7 @@
        (begin
          (emit-ref-cast! body type-idx)
          (wbuf-byte! body OP-GC-PREFIX) (wbuf-byte! body GC-ARRAY-LEN)
-         (emit-box-i31! body) #t)))
+         (emit-box-fixnum! body) #t)))
 
 (define (codegen-array-get! type-idx val body ctx)
   (and (codegen-expr (cadr val) body ctx)
@@ -907,7 +937,7 @@
                     (wbuf-u32! body type-idx))
              (begin (wbuf-byte! body OP-DROP)
                     (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 0)))
-         (emit-box-i31! body) #t)))
+         (emit-box-bool! body) #t)))
 
 (define (codegen-i31-or-type-pred! type-idx val body ctx)
   (if (>= type-idx 0)
@@ -926,13 +956,13 @@
             (wbuf-byte! body OP-GC-PREFIX) (wbuf-byte! body GC-REF-TEST-NN)
             (wbuf-u32! body type-idx)
             (wbuf-byte! body OP-END)
-            (emit-box-i31! body))
+            (emit-box-bool! body))
           ok))
       (and (codegen-expr (cadr val) body ctx)
            (begin
              (wbuf-byte! body OP-GC-PREFIX) (wbuf-byte! body GC-REF-TEST-NN)
              (wbuf-byte! body HT-I31)
-             (emit-box-i31! body) #t))))
+             (emit-box-bool! body) #t))))
 
 (define (codegen-io-call! fn-idx val len body ctx)
   ;; display/write: 2-arg uses stdout, 3-arg extracts fd from port
@@ -943,10 +973,10 @@
              (if (>= (ctx-fn-get-stdout ctx) 0)
                  (begin
                    (wbuf-byte! body OP-CALL) (wbuf-u32! body (ctx-fn-get-stdout ctx))
-                   (emit-box-i31! body))
+                   (emit-box-fixnum! body))
                  (begin
                    (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 1)
-                   (emit-box-i31! body)))
+                   (emit-box-fixnum! body)))
              (wbuf-byte! body OP-CALL) (wbuf-u32! body fn-idx) #t)
            (if (>= (ctx-ty-port ctx) 0)
                ;; Port types exist: dispatch between port struct and raw i31
@@ -957,10 +987,10 @@
                         (wbuf-byte! body OP-GC-PREFIX) (wbuf-byte! body GC-BR-ON-CAST-FAIL)
                         (wbuf-byte! body #x01) (wbuf-u32! body 0)
                         (wbuf-byte! body HT-EQ) (wbuf-u32! body (ctx-ty-port ctx))
-                        ;; Cast succeeded: extract fd field and box as i31
+                        ;; Cast succeeded: extract fd field and box as fixnum
                         (wbuf-byte! body OP-GC-PREFIX) (wbuf-byte! body GC-STRUCT-GET)
                         (wbuf-u32! body (ctx-ty-port ctx)) (wbuf-u32! body 0)
-                        (emit-box-i31! body)
+                        (emit-box-fixnum! body)
                         (wbuf-byte! body OP-END)
                         (wbuf-byte! body OP-CALL) (wbuf-u32! body fn-idx) #t)))
                ;; No port types: value is already i31 fd, pass through
@@ -989,7 +1019,7 @@
       (wbuf-byte! body OP-DROP)
       (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 0)
       (wbuf-byte! body OP-END)
-      (emit-box-i31! body))
+      (emit-box-bool! body))
     ok))
 
 (define (codegen-complex-part! field-idx fallback-i31 val body ctx)
@@ -1011,7 +1041,7 @@
                 (begin
                   (wbuf-byte! body OP-DROP)
                   (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body fallback-i31)
-                  (emit-box-i31! body))
+                  (emit-box-fixnum! body))
                 'noop)
             (wbuf-byte! body OP-END))
           ok))
@@ -1020,7 +1050,7 @@
                (begin
                  (wbuf-byte! body OP-DROP)
                  (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body fallback-i31)
-                 (emit-box-i31! body) #t))
+                 (emit-box-fixnum! body) #t))
           (codegen-expr (cadr val) body ctx))))
 
 (define (codegen-bv-load! load-op val body ctx)
@@ -1030,10 +1060,10 @@
          (emit-cast-struct-get! body (ctx-ty-bytevector ctx) 0)
          (and (codegen-expr (caddr val) body ctx)
               (begin
-                (emit-unbox-i31! body)
+                (emit-unbox-fixnum! body)
                 (wbuf-byte! body OP-I32-ADD)
                 (wbuf-byte! body load-op) (wbuf-u32! body 0) (wbuf-u32! body 0)
-                (emit-box-i31! body) #t)))))
+                (emit-box-fixnum! body) #t)))))
 
 (define (codegen-bv-store-i32! store-op val body ctx)
   ;; bytevector-u8-set! / bytevector-u32-native-set!
@@ -1042,14 +1072,13 @@
          (emit-cast-struct-get! body (ctx-ty-bytevector ctx) 0)
          (and (codegen-expr (caddr val) body ctx)
               (begin
-                (emit-unbox-i31! body)
+                (emit-unbox-fixnum! body)
                 (wbuf-byte! body OP-I32-ADD)
                 (and (codegen-expr (cadddr val) body ctx)
                      (begin
-                       (emit-unbox-i31! body)
+                       (emit-unbox-fixnum! body)
                        (wbuf-byte! body store-op) (wbuf-u32! body 0) (wbuf-u32! body 0)
-                       (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 0)
-                       (emit-box-i31! body) #t)))))))
+                       (emit-void! body) #t)))))))
 
 ;;; --- Operator dispatch ---
 
@@ -1325,9 +1354,7 @@
                    (if (= len 4)
                        (codegen-expr/tail (cadddr val) body ctx tail?)
                        (begin
-                         (wbuf-byte! body OP-I32-CONST)
-                         (wbuf-i32! body 0)
-                         (emit-box-i31! body)
+                         (emit-void! body)
                          #t))
                    (wbuf-byte! body OP-END)
                    #t)))))
@@ -1344,7 +1371,7 @@
     ((string=? op-str "and")
      (cond
        ((= len 1)
-        (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 1)
+        (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 3)
         (emit-box-i31! body) #t)
        ((= len 2)
         (codegen-expr/tail (cadr val) body ctx tail?))
@@ -1365,7 +1392,7 @@
             (let loop ((i 0))
               (when (< i (- nexprs 1))
                 (wbuf-byte! body OP-ELSE)
-                (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 0)
+                (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 1)
                 (emit-box-i31! body)
                 (wbuf-byte! body OP-END)
                 (loop (+ i 1)))))
@@ -1375,7 +1402,7 @@
     ((string=? op-str "or")
      (cond
        ((= len 1)
-        (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 0)
+        (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 1)
         (emit-box-i31! body) #t)
        ((= len 2)
         (codegen-expr/tail (cadr val) body ctx tail?))
@@ -1435,9 +1462,7 @@
                          (when (and ok (= i (- nclauses 1)))
                            ;; last clause, no else: default to void
                            (wbuf-byte! body OP-ELSE)
-                           (wbuf-byte! body OP-I32-CONST)
-                           (wbuf-i32! body 0)
-                           (emit-box-i31! body)))
+                           (emit-void! body)))
                        (loop (+ i 1) (cdr clauses))))))))
        (when ok
          (let loop ((i 0))
@@ -1467,7 +1492,7 @@
      (and (codegen-expr (cadr val) body ctx)
           (begin
             (wbuf-byte! body OP-REF-IS-NULL)
-            (emit-box-i31! body)
+            (emit-box-bool! body)
             #t)))
 
     ((and (string=? op-str "pair?") (= len 2)) (codegen-type-pred! TY-PAIR val body ctx))
@@ -1522,7 +1547,7 @@
           (begin
             (emit-truthy-test! body)
             (wbuf-byte! body OP-I32-EQZ)
-            (emit-box-i31! body)
+            (emit-box-bool! body)
             #t)))
 
     ;; boolean? — must handle any value type, not just i31
@@ -1542,7 +1567,9 @@
            ;;     fall through: value is i31 on stack
            (wbuf-byte! body OP-GC-PREFIX) (wbuf-byte! body GC-I31-GET-S)
            (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 2)
-           (wbuf-byte! body OP-I32-LT-S)
+           (wbuf-byte! body OP-I32-OR)
+           (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 3)
+           (wbuf-byte! body OP-I32-EQ)
            (wbuf-byte! body OP-BR) (wbuf-u32! body 1) ;; br outer with i32 result
            ;;   end inner — non-i31 value on stack
            (wbuf-byte! body OP-END)
@@ -1550,7 +1577,7 @@
            (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 0) ;; false
            ;; end outer — i32 result
            (wbuf-byte! body OP-END)
-           (emit-box-i31! body))
+           (emit-box-bool! body))
          ok)))
 
     ;; number? / complex?
@@ -1600,7 +1627,7 @@
                  (wbuf-byte! body OP-GC-PREFIX) (wbuf-byte! body GC-REF-TEST-NN)
                  (wbuf-u32! body (list-ref types (- ntypes 1)))
                  (wbuf-byte! body OP-END)
-                 (emit-box-i31! body))
+                 (emit-box-bool! body))
                ok))
            ;; no numeric types beyond i31
            (and (codegen-expr (cadr val) body ctx)
@@ -1608,7 +1635,7 @@
                   (wbuf-byte! body OP-GC-PREFIX)
                   (wbuf-byte! body GC-REF-TEST-NN)
                   (wbuf-byte! body HT-I31)
-                  (emit-box-i31! body)
+                  (emit-box-bool! body)
                   #t)))))
 
     ((and (string=? op-str "rational?") (= len 2))
@@ -1727,50 +1754,50 @@
     ((and (string=? op-str "zero?") (= len 2))
      (and (codegen-expr (cadr val) body ctx)
           (begin
-            (emit-unbox-i31! body)
+            (emit-unbox-fixnum! body)
             (wbuf-byte! body OP-I32-EQZ)
-            (emit-box-i31! body)
+            (emit-box-bool! body)
             #t)))
 
     ;; positive?
     ((and (string=? op-str "positive?") (= len 2))
      (and (codegen-expr (cadr val) body ctx)
           (begin
-            (emit-unbox-i31! body)
+            (emit-unbox-fixnum! body)
             (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 0)
             (wbuf-byte! body OP-I32-GT-S)
-            (emit-box-i31! body)
+            (emit-box-bool! body)
             #t)))
 
     ;; negative?
     ((and (string=? op-str "negative?") (= len 2))
      (and (codegen-expr (cadr val) body ctx)
           (begin
-            (emit-unbox-i31! body)
+            (emit-unbox-fixnum! body)
             (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 0)
             (wbuf-byte! body OP-I32-LT-S)
-            (emit-box-i31! body)
+            (emit-box-bool! body)
             #t)))
 
     ;; odd?
     ((and (string=? op-str "odd?") (= len 2))
      (and (codegen-expr (cadr val) body ctx)
           (begin
-            (emit-unbox-i31! body)
+            (emit-unbox-fixnum! body)
             (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 1)
             (wbuf-byte! body OP-I32-AND)
-            (emit-box-i31! body)
+            (emit-box-bool! body)
             #t)))
 
     ;; even?
     ((and (string=? op-str "even?") (= len 2))
      (and (codegen-expr (cadr val) body ctx)
           (begin
-            (emit-unbox-i31! body)
+            (emit-unbox-fixnum! body)
             (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 1)
             (wbuf-byte! body OP-I32-AND)
             (wbuf-byte! body OP-I32-EQZ)
-            (emit-box-i31! body)
+            (emit-box-bool! body)
             #t)))
 
     ;; eq?
@@ -1779,7 +1806,7 @@
           (codegen-expr (caddr val) body ctx)
           (begin
             (wbuf-byte! body OP-REF-EQ)
-            (emit-box-i31! body)
+            (emit-box-bool! body)
             #t)))
 
     ((and (string=? op-str "eqv?") (= len 3)) (codegen-call-2! (ctx-fn-eqv ctx) val body ctx))
@@ -1801,10 +1828,10 @@
      (if (>= (ctx-fn-get-stderr ctx) 0)
          (begin
            (wbuf-byte! body OP-CALL) (wbuf-u32! body (ctx-fn-get-stderr ctx))
-           (emit-box-i31! body) #t)
+           (emit-box-fixnum! body) #t)
          (begin
            (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 2)
-           (emit-box-i31! body) #t)))
+           (emit-box-fixnum! body) #t)))
 
     ;; newline
     ((and (string=? op-str "newline") (= len 1))
@@ -1883,7 +1910,7 @@
          (begin
            ;; No clock available, return 0
            (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 0)
-           (emit-box-i31! body)))
+           (emit-box-fixnum! body)))
      #t)
 
     ((and (string=? op-str "linear-alloc") (= len 3)) (codegen-call-2! (ctx-fn-linear-alloc ctx) val body ctx))
@@ -1915,15 +1942,14 @@
             (emit-cast-struct-get! body (ctx-ty-bytevector ctx) 0)
             (and (codegen-expr (caddr val) body ctx)
                  (begin
-                   (emit-unbox-i31! body)
+                   (emit-unbox-fixnum! body)
                    (wbuf-byte! body OP-I32-ADD)
                    (and (codegen-expr (cadddr val) body ctx)
                         (begin
                           (emit-unbox-f64! body (ctx-ty-flonum ctx))
                           (wbuf-byte! body OP-F64-STORE)
                           (wbuf-u32! body 0) (wbuf-u32! body 0)
-                          (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 0)
-                          (emit-box-i31! body)
+                          (emit-void! body)
                           #t)))))))
 
     ((and (string=? op-str "bytevector->pointer") (= len 2)) (codegen-struct-get-i31! (ctx-ty-bytevector ctx) 0 val body ctx))
@@ -2151,7 +2177,7 @@
                  (begin
                    (emit-cast-struct-get! body (ctx-ty-char ctx) 0)
                    (wbuf-byte! body OP-I32-EQ)
-                   (emit-box-i31! body) #t)))))
+                   (emit-box-bool! body) #t)))))
 
     ((and (string=? op-str "char<?") (= len 3))
      (and (codegen-expr (cadr val) body ctx)
@@ -2161,7 +2187,7 @@
                  (begin
                    (emit-cast-struct-get! body (ctx-ty-char ctx) 0)
                    (wbuf-byte! body OP-I32-LT-S)
-                   (emit-box-i31! body) #t)))))
+                   (emit-box-bool! body) #t)))))
 
     ((and (string=? op-str "char>?") (= len 3))
      (and (codegen-expr (cadr val) body ctx)
@@ -2171,7 +2197,7 @@
                  (begin
                    (emit-cast-struct-get! body (ctx-ty-char ctx) 0)
                    (wbuf-byte! body OP-I32-GT-S)
-                   (emit-box-i31! body) #t)))))
+                   (emit-box-bool! body) #t)))))
 
     ((and (string=? op-str "char<=?") (= len 3))
      (and (codegen-expr (cadr val) body ctx)
@@ -2181,7 +2207,7 @@
                  (begin
                    (emit-cast-struct-get! body (ctx-ty-char ctx) 0)
                    (wbuf-byte! body OP-I32-LE-S)
-                   (emit-box-i31! body) #t)))))
+                   (emit-box-bool! body) #t)))))
 
     ((and (string=? op-str "char>=?") (= len 3))
      (and (codegen-expr (cadr val) body ctx)
@@ -2191,7 +2217,7 @@
                  (begin
                    (emit-cast-struct-get! body (ctx-ty-char ctx) 0)
                    (wbuf-byte! body OP-I32-GE-S)
-                   (emit-box-i31! body) #t)))))
+                   (emit-box-bool! body) #t)))))
 
     ((and (string=? op-str "char-alphabetic?") (= len 2))
      (and (codegen-expr (cadr val) body ctx)
@@ -2205,7 +2231,7 @@
             (wbuf-byte! body OP-I32-SUB)
             (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 26)
             (wbuf-byte! body OP-I32-LT-U)
-            (emit-box-i31! body) #t)))
+            (emit-box-bool! body) #t)))
 
     ((and (string=? op-str "char-numeric?") (= len 2))
      (and (codegen-expr (cadr val) body ctx)
@@ -2216,7 +2242,7 @@
             (wbuf-byte! body OP-I32-SUB)
             (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 10)
             (wbuf-byte! body OP-I32-LT-U)
-            (emit-box-i31! body) #t)))
+            (emit-box-bool! body) #t)))
 
     ((and (string=? op-str "char-whitespace?") (= len 2))
      (and (codegen-expr (cadr val) body ctx)
@@ -2235,7 +2261,7 @@
             (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 32)
             (wbuf-byte! body OP-I32-EQ)
             (wbuf-byte! body OP-I32-OR)
-            (emit-box-i31! body) #t)))
+            (emit-box-bool! body) #t)))
 
     ((and (string=? op-str "char-upcase") (= len 2))
      (and (codegen-expr (cadr val) body ctx)
@@ -2299,7 +2325,7 @@
                    (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 32)
                    (wbuf-byte! body OP-I32-OR)
                    (wbuf-byte! body OP-I32-EQ)
-                   (emit-box-i31! body) #t)))))
+                   (emit-box-bool! body) #t)))))
 
     ((and (string=? op-str "char-ci<?") (= len 3))
      (and (codegen-expr (cadr val) body ctx)
@@ -2313,7 +2339,7 @@
                    (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 32)
                    (wbuf-byte! body OP-I32-OR)
                    (wbuf-byte! body OP-I32-LT-S)
-                   (emit-box-i31! body) #t)))))
+                   (emit-box-bool! body) #t)))))
 
     ((and (string=? op-str "char-ci>?") (= len 3))
      (and (codegen-expr (cadr val) body ctx)
@@ -2327,7 +2353,7 @@
                    (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 32)
                    (wbuf-byte! body OP-I32-OR)
                    (wbuf-byte! body OP-I32-GT-S)
-                   (emit-box-i31! body) #t)))))
+                   (emit-box-bool! body) #t)))))
 
     ((and (string=? op-str "char-ci<=?") (= len 3))
      (and (codegen-expr (cadr val) body ctx)
@@ -2341,7 +2367,7 @@
                    (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 32)
                    (wbuf-byte! body OP-I32-OR)
                    (wbuf-byte! body OP-I32-LE-S)
-                   (emit-box-i31! body) #t)))))
+                   (emit-box-bool! body) #t)))))
 
     ((and (string=? op-str "char-ci>=?") (= len 3))
      (and (codegen-expr (cadr val) body ctx)
@@ -2355,7 +2381,7 @@
                    (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 32)
                    (wbuf-byte! body OP-I32-OR)
                    (wbuf-byte! body OP-I32-GE-S)
-                   (emit-box-i31! body) #t)))))
+                   (emit-box-bool! body) #t)))))
 
     ;; integer->char
     ((and (string=? op-str "integer->char") (= len 2))
@@ -2494,7 +2520,10 @@
                     ((string=? op-str ">=") (cons OP-I32-GE-S FL-NUM-GE))
                     (else (cons 0 -1))))
             (opcode (car info))
-            (fl-offset (cdr info)))
+            (fl-offset (cdr info))
+            (is-cmp (or (string=? op-str "=") (string=? op-str "<")
+                        (string=? op-str ">") (string=? op-str "<=")
+                        (string=? op-str ">="))))
        (and (codegen-expr (cadr val) body ctx)
             (if (and (>= fl-offset 0) (>= (ctx-fn-flonum-start ctx) 0))
                 (and (codegen-expr (caddr val) body ctx)
@@ -2503,12 +2532,12 @@
                        (wbuf-u32! body (+ (ctx-fn-flonum-start ctx) fl-offset))
                        #t))
                 (begin
-                  (emit-unbox-i31! body)
+                  (emit-unbox-fixnum! body)
                   (and (codegen-expr (caddr val) body ctx)
                        (begin
-                         (emit-unbox-i31! body)
+                         (emit-unbox-fixnum! body)
                          (wbuf-byte! body opcode)
-                         (emit-box-i31! body)
+                         (if is-cmp (emit-box-bool! body) (emit-box-fixnum! body))
                          #t)))))))
 
     ;; --- Low-level intrinsics (%-prefixed) ---
@@ -2529,19 +2558,19 @@
             (wbuf-byte! body OP-I32-STORE) (wbuf-u32! body 2) (wbuf-u32! body 0)
             (emit-void! body) #t)))
 
-    ;; %mem-load8 (addr) → load unsigned byte, box i31
+    ;; %mem-load8 (addr) → load unsigned byte, box fixnum
     ((and (string=? op-str "%mem-load8") (= len 2))
      (and (codegen-i32-arg (cadr val) body ctx)
           (begin
             (wbuf-byte! body OP-I32-LOAD8-U) (wbuf-u32! body 0) (wbuf-u32! body 0)
-            (emit-box-i31! body) #t)))
+            (emit-box-fixnum! body) #t)))
 
-    ;; %mem-load32 (addr) → load i32, box i31
+    ;; %mem-load32 (addr) → load i32, box fixnum
     ((and (string=? op-str "%mem-load32") (= len 2))
      (and (codegen-i32-arg (cadr val) body ctx)
           (begin
             (wbuf-byte! body OP-I32-LOAD) (wbuf-u32! body 2) (wbuf-u32! body 0)
-            (emit-box-i31! body) #t)))
+            (emit-box-fixnum! body) #t)))
 
     ;; %fd-write (fd iov-ptr iov-cnt ret-ptr) → call fd_write, box result
     ((and (string=? op-str "%fd-write") (= len 5))
@@ -2553,7 +2582,7 @@
        (when ok
          (wbuf-byte! body OP-CALL)
          (wbuf-u32! body (ctx-fn-io ctx))
-         (emit-box-i31! body))
+         (emit-box-fixnum! body))
        ok))
 
     ;; %stream-write (handle ptr len retptr) → call stream-write, push void
@@ -2573,43 +2602,43 @@
     ((and (string=? op-str "%get-stdout") (= len 1))
      (wbuf-byte! body OP-CALL)
      (wbuf-u32! body (ctx-fn-get-stdout ctx))
-     (emit-box-i31! body) #t)
+     (emit-box-fixnum! body) #t)
 
     ;; %get-stderr () → call get-stderr, box result
     ((and (string=? op-str "%get-stderr") (= len 1))
      (wbuf-byte! body OP-CALL)
      (wbuf-u32! body (ctx-fn-get-stderr ctx))
-     (emit-box-i31! body) #t)
+     (emit-box-fixnum! body) #t)
 
-    ((and (string=? op-str "%i31-add") (= len 3)) (codegen-binary-i31! OP-I32-ADD val body ctx))
-    ((and (string=? op-str "%i31-sub") (= len 3)) (codegen-binary-i31! OP-I32-SUB val body ctx))
-    ((and (string=? op-str "%i31-mul") (= len 3)) (codegen-binary-i31! OP-I32-MUL val body ctx))
-    ((and (string=? op-str "%i31-div") (= len 3)) (codegen-binary-i31! OP-I32-DIV-S val body ctx))
-    ((and (string=? op-str "%i31-rem") (= len 3)) (codegen-binary-i31! OP-I32-REM-S val body ctx))
-    ((and (string=? op-str "%i31-rem-u") (= len 3)) (codegen-binary-i31! OP-I32-REM-U val body ctx))
+    ((and (string=? op-str "%i31-add") (= len 3)) (codegen-binary-fixnum! OP-I32-ADD val body ctx))
+    ((and (string=? op-str "%i31-sub") (= len 3)) (codegen-binary-fixnum! OP-I32-SUB val body ctx))
+    ((and (string=? op-str "%i31-mul") (= len 3)) (codegen-binary-fixnum! OP-I32-MUL val body ctx))
+    ((and (string=? op-str "%i31-div") (= len 3)) (codegen-binary-fixnum! OP-I32-DIV-S val body ctx))
+    ((and (string=? op-str "%i31-rem") (= len 3)) (codegen-binary-fixnum! OP-I32-REM-S val body ctx))
+    ((and (string=? op-str "%i31-rem-u") (= len 3)) (codegen-binary-fixnum! OP-I32-REM-U val body ctx))
 
     ;; %i31-neg (a) → 0 - a
     ((and (string=? op-str "%i31-neg") (= len 2))
      (and (begin (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 0) #t)
           (codegen-i32-arg (cadr val) body ctx)
-          (begin (wbuf-byte! body OP-I32-SUB) (emit-box-i31! body) #t)))
+          (begin (wbuf-byte! body OP-I32-SUB) (emit-box-fixnum! body) #t)))
 
-    ;; %i31-eqz (a) → i32.eqz, box
+    ;; %i31-eqz (a) → i32.eqz, box bool
     ((and (string=? op-str "%i31-eqz") (= len 2))
      (and (codegen-i32-arg (cadr val) body ctx)
-          (begin (wbuf-byte! body OP-I32-EQZ) (emit-box-i31! body) #t)))
+          (begin (wbuf-byte! body OP-I32-EQZ) (emit-box-bool! body) #t)))
 
-    ((and (string=? op-str "%i31-eq") (= len 3)) (codegen-binary-i31! OP-I32-EQ val body ctx))
-    ((and (string=? op-str "%i31-lt") (= len 3)) (codegen-binary-i31! OP-I32-LT-S val body ctx))
-    ((and (string=? op-str "%i31-gt") (= len 3)) (codegen-binary-i31! OP-I32-GT-S val body ctx))
-    ((and (string=? op-str "%i31-le") (= len 3)) (codegen-binary-i31! OP-I32-LE-S val body ctx))
-    ((and (string=? op-str "%i31-ge") (= len 3)) (codegen-binary-i31! OP-I32-GE-S val body ctx))
-    ((and (string=? op-str "%i31-and") (= len 3)) (codegen-binary-i31! OP-I32-AND val body ctx))
-    ((and (string=? op-str "%i31-xor") (= len 3)) (codegen-binary-i31! OP-I32-XOR val body ctx))
-    ((and (string=? op-str "%i31-or") (= len 3)) (codegen-binary-i31! OP-I32-OR val body ctx))
-    ((and (string=? op-str "%i31-shl") (= len 3)) (codegen-binary-i31! OP-I32-SHL val body ctx))
-    ((and (string=? op-str "bitwise-and") (= len 3)) (codegen-binary-i31! OP-I32-AND val body ctx))
-    ((and (string=? op-str "bitwise-ior") (= len 3)) (codegen-binary-i31! OP-I32-OR val body ctx))
+    ((and (string=? op-str "%i31-eq") (= len 3)) (codegen-binary-bool! OP-I32-EQ val body ctx))
+    ((and (string=? op-str "%i31-lt") (= len 3)) (codegen-binary-bool! OP-I32-LT-S val body ctx))
+    ((and (string=? op-str "%i31-gt") (= len 3)) (codegen-binary-bool! OP-I32-GT-S val body ctx))
+    ((and (string=? op-str "%i31-le") (= len 3)) (codegen-binary-bool! OP-I32-LE-S val body ctx))
+    ((and (string=? op-str "%i31-ge") (= len 3)) (codegen-binary-bool! OP-I32-GE-S val body ctx))
+    ((and (string=? op-str "%i31-and") (= len 3)) (codegen-binary-fixnum! OP-I32-AND val body ctx))
+    ((and (string=? op-str "%i31-xor") (= len 3)) (codegen-binary-fixnum! OP-I32-XOR val body ctx))
+    ((and (string=? op-str "%i31-or") (= len 3)) (codegen-binary-fixnum! OP-I32-OR val body ctx))
+    ((and (string=? op-str "%i31-shl") (= len 3)) (codegen-binary-fixnum! OP-I32-SHL val body ctx))
+    ((and (string=? op-str "bitwise-and") (= len 3)) (codegen-binary-fixnum! OP-I32-AND val body ctx))
+    ((and (string=? op-str "bitwise-ior") (= len 3)) (codegen-binary-fixnum! OP-I32-OR val body ctx))
 
     ;; arithmetic-shift (value amount)
     ;; Positive amount = left shift, negative = right shift
@@ -2620,17 +2649,17 @@
         ((and (integer? shift-amt) (exact? shift-amt) (>= shift-amt 0))
          (and (codegen-i32-arg (cadr val) body ctx)
               (codegen-i32-arg shift-amt body ctx)
-              (begin (wbuf-byte! body OP-I32-SHL) (emit-box-i31! body) #t)))
+              (begin (wbuf-byte! body OP-I32-SHL) (emit-box-fixnum! body) #t)))
         ((and (integer? shift-amt) (exact? shift-amt) (< shift-amt 0))
          (and (codegen-i32-arg (cadr val) body ctx)
               (codegen-i32-arg (- 0 shift-amt) body ctx)
-              (begin (wbuf-byte! body OP-I32-SHR-S) (emit-box-i31! body) #t)))
+              (begin (wbuf-byte! body OP-I32-SHR-S) (emit-box-fixnum! body) #t)))
         (else
          (error "arithmetic-shift: variable shift amounts not supported")))))
 
-    ((and (string=? op-str "%i31-div-u") (= len 3)) (codegen-binary-i31! OP-I32-DIV-U val body ctx))
-    ((and (string=? op-str "%i31-ge-u") (= len 3)) (codegen-binary-i31! OP-I32-GE-U val body ctx))
-    ((and (string=? op-str "%i31-ne") (= len 3)) (codegen-binary-i31! OP-I32-NE val body ctx))
+    ((and (string=? op-str "%i31-div-u") (= len 3)) (codegen-binary-fixnum! OP-I32-DIV-U val body ctx))
+    ((and (string=? op-str "%i31-ge-u") (= len 3)) (codegen-binary-bool! OP-I32-GE-U val body ctx))
+    ((and (string=? op-str "%i31-ne") (= len 3)) (codegen-binary-bool! OP-I32-NE val body ctx))
 
     ((and (string=? op-str "%i31?") (= len 2)) (codegen-type-pred! HT-I31 val body ctx))
     ((and (string=? op-str "%flonum?") (= len 2)) (codegen-type-pred! (ctx-ty-flonum ctx) val body ctx))
@@ -2645,20 +2674,20 @@
     ((and (string=? op-str "%car") (= len 2)) (codegen-struct-get! TY-PAIR 0 val body ctx))
     ((and (string=? op-str "%cdr") (= len 2)) (codegen-struct-get! TY-PAIR 1 val body ctx))
 
-    ;; %ref-eq (a b) → ref.eq, box i31
+    ;; %ref-eq (a b) → ref.eq, box bool
     ((and (string=? op-str "%ref-eq") (= len 3))
      (and (codegen-expr (cadr val) body ctx)
           (codegen-expr (caddr val) body ctx)
-          (begin (wbuf-byte! body OP-REF-EQ) (emit-box-i31! body) #t)))
+          (begin (wbuf-byte! body OP-REF-EQ) (emit-box-bool! body) #t)))
 
     ;; %ref-null → ref.null eq
     ((and (string=? op-str "%ref-null") (= len 1))
      (wbuf-byte! body OP-REF-NULL) (wbuf-byte! body HT-EQ) #t)
 
-    ;; %ref-is-null (x) → ref.is_null, box i31
+    ;; %ref-is-null (x) → ref.is_null, box bool
     ((and (string=? op-str "%ref-is-null") (= len 2))
      (and (codegen-expr (cadr val) body ctx)
-          (begin (wbuf-byte! body OP-REF-IS-NULL) (emit-box-i31! body) #t)))
+          (begin (wbuf-byte! body OP-REF-IS-NULL) (emit-box-bool! body) #t)))
 
     ((and (string=? op-str "%f64-add") (= len 3)) (codegen-binary-f64! OP-F64-ADD val body ctx))
     ((and (string=? op-str "%f64-sub") (= len 3)) (codegen-binary-f64! OP-F64-SUB val body ctx))
@@ -2688,12 +2717,12 @@
             (wbuf-byte! body OP-F64-CONVERT-I32-S)
             (emit-box-f64! body (ctx-ty-flonum ctx)) #t)))
 
-    ;; %f64-trunc-to-i31 (x) → unbox flonum, i32.trunc_f64_s, box i31
+    ;; %f64-trunc-to-i31 (x) → unbox flonum, i32.trunc_f64_s, box fixnum
     ((and (string=? op-str "%f64-trunc-to-i31") (= len 2))
      (and (codegen-f64-arg (cadr val) body ctx)
           (begin
             (wbuf-byte! body OP-I32-TRUNC-F64-S)
-            (emit-box-i31! body) #t)))
+            (emit-box-fixnum! body) #t)))
 
     ((and (string=? op-str "%rational-num") (= len 2)) (codegen-struct-get-i31! (ctx-ty-rational ctx) 0 val body ctx))
     ((and (string=? op-str "%rational-den") (= len 2)) (codegen-struct-get-i31! (ctx-ty-rational ctx) 1 val body ctx))
@@ -2736,7 +2765,7 @@
                  (begin
                    (wbuf-byte! body OP-GC-PREFIX) (wbuf-byte! body GC-ARRAY-GET-U)
                    (wbuf-u32! body TY-STRING)
-                   (emit-box-i31! body) #t)))))
+                   (emit-box-fixnum! body) #t)))))
 
     ((and (string=? op-str "%string-set!") (= len 4))
      (and (codegen-expr (cadr val) body ctx)
@@ -2770,19 +2799,19 @@
             (wbuf-byte! body OP-GC-PREFIX) (wbuf-byte! body GC-ARRAY-NEW)
             (wbuf-u32! body (ctx-ty-vector ctx)) #t)))
 
-    ;; %memory-size → memory.size, shift left 16, box i31
+    ;; %memory-size → memory.size, shift left 16, box fixnum
     ((and (string=? op-str "%memory-size") (= len 1))
      (wbuf-byte! body OP-MEMORY-SIZE) (wbuf-u32! body 0)
      (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 16)
      (wbuf-byte! body OP-I32-SHL)
-     (emit-box-i31! body) #t)
+     (emit-box-fixnum! body) #t)
 
-    ;; %memory-grow (n) → unbox, memory.grow, box i31
+    ;; %memory-grow (n) → unbox, memory.grow, box fixnum
     ((and (string=? op-str "%memory-grow") (= len 2))
      (and (codegen-i32-arg (cadr val) body ctx)
           (begin
             (wbuf-byte! body OP-MEMORY-GROW) (wbuf-u32! body 0)
-            (emit-box-i31! body) #t)))
+            (emit-box-fixnum! body) #t)))
 
     ;; %memory-fill (dest val count) → memory.fill, push void
     ((and (string=? op-str "%memory-fill") (= len 4))
@@ -2807,10 +2836,10 @@
             (wbuf-byte! body 0)
             (emit-void! body) #t)))
 
-    ;; %global-get-bump-ptr → global.get, box i31
+    ;; %global-get-bump-ptr → global.get, box fixnum
     ((and (string=? op-str "%global-get-bump-ptr") (= len 1))
      (wbuf-byte! body OP-GLOBAL-GET) (wbuf-u32! body (ctx-bump-ptr-idx ctx))
-     (emit-box-i31! body) #t)
+     (emit-box-fixnum! body) #t)
 
     ;; %global-set-bump-ptr! (v) → unbox, global.set, push void
     ((and (string=? op-str "%global-set-bump-ptr!") (= len 2))
@@ -2826,7 +2855,7 @@
           (begin
             (wbuf-byte! body OP-CALL)
             (wbuf-u32! body (ctx-fn-args-sizes-get ctx))
-            (emit-box-i31! body) #t)))
+            (emit-box-fixnum! body) #t)))
 
     ;; %wasi-args-get (a b) → unbox both, call, box result
     ((and (string=? op-str "%wasi-args-get") (= len 3))
@@ -2835,7 +2864,7 @@
           (begin
             (wbuf-byte! body OP-CALL)
             (wbuf-u32! body (ctx-fn-args-get ctx))
-            (emit-box-i31! body) #t)))
+            (emit-box-fixnum! body) #t)))
 
     ;; %call-get-arguments (retptr) → call P2 get-arguments import
     ((and (string=? op-str "%call-get-arguments") (= len 2))
@@ -2853,11 +2882,11 @@
             (wbuf-u32! body (ctx-fn-get-environment ctx))
             (emit-void! body) #t)))
 
-    ;; %call-get-stdin () → call P2 get-stdin, box result as i31
+    ;; %call-get-stdin () → call P2 get-stdin, box result as fixnum
     ((and (string=? op-str "%call-get-stdin") (= len 1))
      (wbuf-byte! body OP-CALL)
      (wbuf-u32! body (ctx-fn-get-stdin ctx))
-     (emit-box-i31! body) #t)
+     (emit-box-fixnum! body) #t)
 
     ;; %call-stream-read (handle len_i32 retptr) → extend len to i64, call blocking-read
     ((and (string=? op-str "%call-stream-read") (= len 4))
@@ -2953,7 +2982,7 @@
           (begin
             (wbuf-byte! body OP-CALL)
             (wbuf-u32! body (ctx-fn-environ-sizes-get ctx))
-            (emit-box-i31! body) #t)))
+            (emit-box-fixnum! body) #t)))
 
     ;; %wasi-environ-get (a b)
     ((and (string=? op-str "%wasi-environ-get") (= len 3))
@@ -2962,7 +2991,7 @@
           (begin
             (wbuf-byte! body OP-CALL)
             (wbuf-u32! body (ctx-fn-environ-get ctx))
-            (emit-box-i31! body) #t)))
+            (emit-box-fixnum! body) #t)))
 
     ;; %wasi-fd-read (fd iovs iovcnt nread_ptr) → call fd_read, box result
     ((and (string=? op-str "%wasi-fd-read") (= len 5))
@@ -2974,7 +3003,7 @@
        (when ok
          (wbuf-byte! body OP-CALL)
          (wbuf-u32! body (ctx-fn-fd-read ctx))
-         (emit-box-i31! body))
+         (emit-box-fixnum! body))
        ok))
 
     ;; %wasi-fd-close (fd) → call fd_close, box result
@@ -2983,7 +3012,7 @@
           (begin
             (wbuf-byte! body OP-CALL)
             (wbuf-u32! body (ctx-fn-fd-close ctx))
-            (emit-box-i31! body) #t)))
+            (emit-box-fixnum! body) #t)))
 
     ;; %wasi-path-open (dirfd dirflags path_ptr path_len oflags rights fdflags result_ptr)
     ;; → unbox all to i32, extend rights to i64, insert rights_inheriting=0, call path_open, box
@@ -3003,7 +3032,7 @@
        (when ok
          (wbuf-byte! body OP-CALL)
          (wbuf-u32! body (ctx-fn-path-open ctx))
-         (emit-box-i31! body))
+         (emit-box-fixnum! body))
        ok))
 
     ;; %make-port (fd mode buf src-str pos) → i32 i32 i32 ref i32, struct.new $ty_port
@@ -3090,7 +3119,7 @@
             (wbuf-byte! body OP-I32-AND)
             (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body 1023)
             (wbuf-byte! body OP-I32-SUB)
-            (emit-box-i31! body) #t)))
+            (emit-box-fixnum! body) #t)))
 
     ;; %f64-mantissa (x) → extract mantissa normalized to [1,2)
     ((and (string=? op-str "%f64-mantissa") (= len 2))

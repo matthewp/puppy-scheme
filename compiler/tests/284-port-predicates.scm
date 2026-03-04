@@ -1,6 +1,6 @@
 
 ;; wasi-dir: tests
-;; expect: 110010
+;; expect: #t#t#f#f#t#f
 (let ((p (open-input-file "lib/hello.txt")))
   (display (port? p))
   (display (input-port? p))

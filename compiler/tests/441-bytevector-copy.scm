@@ -2,7 +2,7 @@
 ;; expect: 10 20 30
 ;; expect: 2
 ;; expect: 20 30
-;; expect: 1
+;; expect: #t
 (let ((bv (make-bytevector 3 0)))
   (bytevector-u8-set! bv 0 10)
   (bytevector-u8-set! bv 1 20)

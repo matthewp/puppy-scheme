@@ -1,2 +1,2 @@
-;; expect: 0
+;; expect: #f
 (display (null? (cons 1 2)))

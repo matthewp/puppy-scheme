@@ -1,4 +1,4 @@
-;; expect: 42 -7 0 0 0
+;; expect: 42 -7 #f 0 #f
 (display (string->number "42"))
 (display " ")
 (display (string->number "-7"))

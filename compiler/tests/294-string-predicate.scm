@@ -1,4 +1,4 @@
-;; expect: 1010
+;; expect: #t#f#t#f
 (display (string? "hello"))
 (display (string? 42))
 (display (string? ""))

@@ -1,5 +1,5 @@
 
-;; expect: hello1
+;; expect: hello#t
 (let ((p (open-input-string "hello")))
   (display (read-char p))
   (display (read-char p))

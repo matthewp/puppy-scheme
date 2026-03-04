@@ -1,6 +1,6 @@
-;; expect: 1
-;; expect: 0
-;; expect: 1
+;; expect: #t
+;; expect: #f
+;; expect: #t
 (display (eq? 1 1))
 (newline)
 (display (eq? 1 2))

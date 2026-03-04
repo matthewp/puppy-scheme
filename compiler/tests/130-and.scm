@@ -1,6 +1,6 @@
 ;; expect: 3
-;; expect: 0
-;; expect: 1
+;; expect: #f
+;; expect: #t
 (display (and 1 2 3))
 (newline)
 (display (and 1 #f 3))
