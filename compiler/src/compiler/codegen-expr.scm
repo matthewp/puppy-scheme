@@ -238,6 +238,9 @@
 (define (ctx-fn-vector-fill ctx) (vector-ref ctx 112))
 (define (ctx-fn-string-fill ctx) (vector-ref ctx 113))
 (define (ctx-ty-promise ctx) (vector-ref ctx 114))
+(define (ctx-fn-escape-cont ctx) (vector-ref ctx 115))   ;; table index of escape_cont function (-1 if not needed)
+(define (ctx-global-escape-id ctx) (vector-ref ctx 116)) ;; global index for escape-id (-1 if not needed)
+(define (ctx-global-escape-val ctx) (vector-ref ctx 117)) ;; global index for escape-val (-1 if not needed)
 (define (ctx-is-boxed? ctx name) (string-ht-has? (ctx-boxed-locals-hash ctx) name))
 
 (define (build-boxed-locals-hash lst)
@@ -376,7 +379,8 @@
                   fn-open-at fn-read-via-stream fn-write-via-stream
                   fn-drop-descriptor fn-drop-input-stream fn-drop-output-stream
                   fn-vector-fill fn-string-fill
-                  ty-promise)
+                  ty-promise
+                  fn-escape-cont global-escape-id global-escape-val)
   (vector locals nlocals globals funcs lambdas wrappers
           closure-arities nclosure-arity narity
           fn-display fn-newline fn-eqv fn-equal
@@ -419,7 +423,8 @@
           fn-open-at fn-read-via-stream fn-write-via-stream
           fn-drop-descriptor fn-drop-input-stream fn-drop-output-stream
           fn-vector-fill fn-string-fill
-          ty-promise))
+          ty-promise
+          fn-escape-cont global-escape-id global-escape-val))
 
 (define (ctx-with-locals ctx locals nlocals)
   (let ((new-ctx (vector-copy ctx)))
@@ -1085,6 +1090,7 @@
 ;; Hash table of all known operators for fast rejection of function calls.
 ;; Lazily initialized since make-string-ht is in analyze.scm.
 (define *codegen-ops* #f)
+(define *callcc-counter* 0)  ;; Compile-time counter for unique call/cc escape IDs
 (define (init-codegen-ops!)
   (when (not *codegen-ops*)
     (let ((ht (make-string-ht)))
@@ -1154,7 +1160,8 @@
           "%call-get-stdin" "%call-stream-read" "%call-get-directories"
           "%call-open-at" "%call-read-via-stream" "%call-write-via-stream"
           "%call-drop-descriptor" "%call-drop-input-stream" "%call-drop-output-stream"
-          "%make-promise" "%promise-ref" "%promise-set!" "%promise-state" "%promise-set-state!" "promise?"))
+          "%make-promise" "%promise-ref" "%promise-set!" "%promise-state" "%promise-set-state!" "promise?"
+          "%callcc"))
       (set! *codegen-ops* ht))))
 
 (define (codegen-op-dispatch op val len body ctx tail?)
@@ -3409,6 +3416,67 @@
     ((and (string=? op-str "promise?") (= len 2))
      (codegen-type-pred! (ctx-ty-promise ctx) val body ctx))
 
+    ;; call-with-current-continuation / call/cc
+    ;; Desugared by expand.scm to: (let ((__callcc_proc f)) (%callcc __callcc_proc))
+    ;; (%callcc proc-sym) where proc-sym is a local variable holding the procedure.
+    ;; Uses WASM exception handling (try/catch/throw) for escape continuations.
+    ((and (string=? op-str "%callcc") (= len 2) (symbol? (cadr val)))
+     (let* ((escape-cont-tidx (ctx-fn-escape-cont ctx))
+            (escape-id-gidx (ctx-global-escape-id ctx))
+            (escape-val-gidx (ctx-global-escape-val ctx)))
+       (if (or (< escape-cont-tidx 0) (< escape-id-gidx 0) (< escape-val-gidx 0))
+           (begin
+             (display "error: call/cc used but escape mechanism not initialized\n"
+                      (current-error-port))
+             #f)
+           (let* ((escape-id *callcc-counter*)
+                  (_ (set! *callcc-counter* (+ *callcc-counter* 1)))
+                  (tidx-closure1 (let loop ((j 0) (cas (ctx-closure-arities ctx)))
+                                   (cond
+                                     ((null? cas) -1)
+                                     ((= (car cas) 1)
+                                      (+ (ctx-ty-user-start ctx) (ctx-narity ctx) j))
+                                     (else (loop (+ j 1) (cdr cas))))))
+                  (proc-name (symbol->string (cadr val)))
+                  (li (ctx-local ctx proc-name)))
+             (cond
+               ((< tidx-closure1 0)
+                (display "error: no closure type for arity 1 (needed for call/cc)\n"
+                         (current-error-port))
+                #f)
+               ((< li 0)
+                (display (string-append "error: call/cc: proc var \'"
+                                        proc-name "\' not found as local\n")
+                         (current-error-port))
+                #f)
+               (else
+                (wbuf-byte! body OP-TRY) (wbuf-byte! body HT-EQ)
+                (wbuf-byte! body OP-LOCAL-GET) (wbuf-u32! body li)
+                (emit-cast-struct-get! body TY-CLOSURE 1)
+                (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body escape-cont-tidx)
+                (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body (* escape-id 2))
+                (emit-box-i31! body)
+                (wbuf-byte! body OP-GC-PREFIX) (wbuf-byte! body GC-ARRAY-NEW-FIXED)
+                (wbuf-u32! body TY-ENV) (wbuf-u32! body 1)
+                (wbuf-byte! body OP-GC-PREFIX) (wbuf-byte! body GC-STRUCT-NEW)
+                (wbuf-u32! body TY-CLOSURE)
+                (wbuf-byte! body OP-LOCAL-GET) (wbuf-u32! body li)
+                (emit-cast-struct-get! body TY-CLOSURE 0)
+                (wbuf-byte! body OP-CALL-INDIRECT)
+                (wbuf-u32! body tidx-closure1) (wbuf-u32! body 0)
+                (wbuf-byte! body OP-CATCH) (wbuf-u32! body 0)
+                (wbuf-byte! body OP-GLOBAL-GET) (wbuf-u32! body escape-id-gidx)
+                (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body escape-id)
+                (wbuf-byte! body OP-I32-EQ)
+                (wbuf-byte! body OP-IF) (wbuf-byte! body HT-EQ)
+                (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body -1)
+                (wbuf-byte! body OP-GLOBAL-SET) (wbuf-u32! body escape-id-gidx)
+                (wbuf-byte! body OP-GLOBAL-GET) (wbuf-u32! body escape-val-gidx)
+                (wbuf-byte! body OP-ELSE)
+                (wbuf-byte! body OP-RETHROW) (wbuf-u32! body 1)
+                (wbuf-byte! body OP-END)
+                (wbuf-byte! body OP-END)
+                #t))))))
     ;; %call (fn-idx arg1 arg2 ...) → call function by raw index
     ((and (string=? op-str "%call") (>= len 2))
      (let ((fn-idx (cadr val))

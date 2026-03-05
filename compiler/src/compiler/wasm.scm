@@ -18,12 +18,17 @@
 (define SEC-EXPORT   7)
 (define SEC-ELEMENT  9)
 (define SEC-CODE     10)
+(define SEC-TAG      13)  ;; Exception tag section (exception handling proposal)
 
 ;; Opcodes
 (define OP-BLOCK      #x02)
 (define OP-LOOP       #x03)
 (define OP-IF         #x04)
 (define OP-ELSE       #x05)
+(define OP-TRY        #x06)  ;; Exception handling: try block
+(define OP-CATCH      #x07)  ;; Exception handling: catch clause
+(define OP-THROW      #x08)  ;; Exception handling: throw
+(define OP-RETHROW    #x09)  ;; Exception handling: rethrow
 (define OP-END        #x0B)
 (define OP-BR         #x0C)
 (define OP-BR-IF      #x0D)

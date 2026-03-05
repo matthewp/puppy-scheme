@@ -133,7 +133,9 @@
     "caar" "cadr" "cdar" "cddr"
     "caaar" "caadr" "cadar" "caddr" "cdaar" "cdadr" "cddar" "cdddr"
     "caaaar" "caaadr" "caadar" "caaddr" "cadaar" "cadadr" "caddar" "cadddr"
-    "cdaaar" "cdaadr" "cdadar" "cdaddr" "cddaar" "cddadr" "cdddar" "cddddr"))
+    "cdaaar" "cdaadr" "cdadar" "cdaddr" "cddaar" "cddadr" "cdddar" "cddddr"
+    "call-with-current-continuation" "call/cc"
+    "%callcc"))
 
 ;; Use string=? instead of equal? for member checks — equal?'s %string?
 ;; type test can fail under WASM GC due to ref.test on nominal types
@@ -189,7 +191,8 @@
 (define FLAG-GET-ENV 26)
 (define FLAG-EXIT 27)
 (define FLAG-PROMISE 28)
-(define FLAG-COUNT 29)
+(define FLAG-CALLCC 29)
+(define FLAG-COUNT 30)
 
 (define (make-flags) (make-vector FLAG-COUNT #f))
 
@@ -439,7 +442,10 @@
         (cons "%promise-set!" FLAG-PROMISE)
         (cons "%promise-state" FLAG-PROMISE)
         (cons "%promise-set-state!" FLAG-PROMISE)
-        (cons "promise?" FLAG-PROMISE)))
+        (cons "promise?" FLAG-PROMISE)
+        (cons "call-with-current-continuation" FLAG-CALLCC)
+        (cons "call/cc" FLAG-CALLCC)
+        (cons "%callcc" FLAG-CALLCC)))
     ht))
 
 ;;; --- Builtin dependency table ---
@@ -452,7 +458,7 @@
           "flonum" "rational" "complex" "math" "command-line" "string-append"
           "bytevector" "char" "symbol" "file-io" "string-ops" "read" "vector"
           "write" "clock" "apply" "file-exists" "bv-copy" "bv-append" "utf8-string" "get-env"
-          "exit" "promise"))
+          "exit" "promise" "callcc"))
 
 (define *flag-name-ht*
   ;; name string → FLAG index
@@ -1323,6 +1329,7 @@
         (needs-get-env (vector-ref flags FLAG-GET-ENV))
         (needs-exit (vector-ref flags FLAG-EXIT))
         (needs-promise (vector-ref flags FLAG-PROMISE))
+        (needs-callcc (vector-ref flags FLAG-CALLCC))
         (nimports (if *wit-world*
                       (length (wit-world-func-imports *wit-world*))
                       0))
