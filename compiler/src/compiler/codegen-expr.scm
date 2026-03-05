@@ -3419,7 +3419,17 @@
     ;; call-with-current-continuation / call/cc
     ;; Desugared by expand.scm to: (let ((__callcc_proc f)) (%callcc __callcc_proc))
     ;; (%callcc proc-sym) where proc-sym is a local variable holding the procedure.
-    ;; Uses WASM exception handling (try/catch/throw) for escape continuations.
+    ;; Uses WASM exception handling (try_table/throw) for escape continuations.
+    ;; Structure:
+    ;;   block $done (result eqref)
+    ;;     block $handler (void)          ; catch target
+    ;;       try_table (result eqref) (catch 0 1)  ; catch tag 0, branch to $handler exit
+    ;;         ... call proc(env, k) ...
+    ;;         br 2                       ; normal exit via $done
+    ;;       end
+    ;;     end $handler                   ; exception path arrives here (empty stack)
+    ;;     [check escape-id, return val or re-throw]
+    ;;   end $done
     ((and (string=? op-str "%callcc") (= len 2) (symbol? (cadr val)))
      (let* ((escape-cont-tidx (ctx-fn-escape-cont ctx))
             (escape-id-gidx (ctx-global-escape-id ctx))
@@ -3450,9 +3460,22 @@
                          (current-error-port))
                 #f)
                (else
-                (wbuf-byte! body OP-TRY) (wbuf-byte! body HT-EQ)
+                ;; block $done (result eqref) — outer result block
+                (wbuf-byte! body OP-BLOCK) (wbuf-byte! body HT-EQ)
+                ;; block $handler (void) — catch target (exception arrives here)
+                (wbuf-byte! body OP-BLOCK) (wbuf-byte! body TYPE-VOID)
+                ;; try_table (result eqref) (catch 0 1)
+                ;; catch tag=0 → branch to label depth 1 ($handler exit)
+                (wbuf-byte! body OP-TRY-TABLE) (wbuf-byte! body HT-EQ)
+                (wbuf-u32! body 1)          ;; 1 catch clause
+                (wbuf-byte! body #x00)      ;; catch (not catch_ref)
+                (wbuf-u32! body 0)          ;; tag index 0
+                (wbuf-u32! body 1)          ;; label index 1 = $handler exit
+                ;; try body: call proc(env_of_proc, k_closure)
+                ;; Step 1: push env from proc closure (for call_indirect first param)
                 (wbuf-byte! body OP-LOCAL-GET) (wbuf-u32! body li)
                 (emit-cast-struct-get! body TY-CLOSURE 1)
+                ;; Step 2: build k_closure = escape_cont closure with escape-id in env
                 (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body escape-cont-tidx)
                 (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body (* escape-id 2))
                 (emit-box-i31! body)
@@ -3460,11 +3483,19 @@
                 (wbuf-u32! body TY-ENV) (wbuf-u32! body 1)
                 (wbuf-byte! body OP-GC-PREFIX) (wbuf-byte! body GC-STRUCT-NEW)
                 (wbuf-u32! body TY-CLOSURE)
+                ;; Step 3: push code index from proc closure (for call_indirect)
                 (wbuf-byte! body OP-LOCAL-GET) (wbuf-u32! body li)
                 (emit-cast-struct-get! body TY-CLOSURE 0)
+                ;; call proc(env_of_proc, k_closure) via table
                 (wbuf-byte! body OP-CALL-INDIRECT)
                 (wbuf-u32! body tidx-closure1) (wbuf-u32! body 0)
-                (wbuf-byte! body OP-CATCH) (wbuf-u32! body 0)
+                ;; normal path: eqref result on stack → exit $done
+                (wbuf-byte! body OP-BR) (wbuf-u32! body 2)
+                ;; end try_table (unreachable after br 2)
+                (wbuf-byte! body OP-END)
+                ;; end $handler — exception path jumps to here (empty stack)
+                (wbuf-byte! body OP-END)
+                ;; Exception handler: check escape-id, return val or re-throw
                 (wbuf-byte! body OP-GLOBAL-GET) (wbuf-u32! body escape-id-gidx)
                 (wbuf-byte! body OP-I32-CONST) (wbuf-i32! body escape-id)
                 (wbuf-byte! body OP-I32-EQ)
@@ -3473,8 +3504,11 @@
                 (wbuf-byte! body OP-GLOBAL-SET) (wbuf-u32! body escape-id-gidx)
                 (wbuf-byte! body OP-GLOBAL-GET) (wbuf-u32! body escape-val-gidx)
                 (wbuf-byte! body OP-ELSE)
-                (wbuf-byte! body OP-RETHROW) (wbuf-u32! body 1)
+                ;; Not our escape — re-throw: since tag 0 has no parameters, escape-id/escape-val
+                ;; globals carry all state, so throwing tag 0 again is fully equivalent to rethrow.
+                (wbuf-byte! body OP-THROW) (wbuf-u32! body 0)
                 (wbuf-byte! body OP-END)
+                ;; end $done
                 (wbuf-byte! body OP-END)
                 #t))))))
     ;; %call (fn-idx arg1 arg2 ...) → call function by raw index
