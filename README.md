@@ -222,7 +222,7 @@ Building puppypack itself requires the wasmtime C API library and a one-time `ma
 - [x] `file-exists?`
 - [x] `open-input-file` `open-output-file`
 - [x] `close-input-port` `close-output-port`
-- [ ] `current-input-port` `current-output-port` `current-error-port`
+- [x] `current-input-port` `current-output-port` `current-error-port`
 - [x] `eof-object?`
 - [ ] `eof-object`
 - [ ] `char-ready?`

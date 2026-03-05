@@ -393,6 +393,8 @@
         (cons "input-port?" FLAG-FILE-IO)
         (cons "output-port?" FLAG-FILE-IO)
         (cons "current-error-port" FLAG-DISPLAY)
+        (cons "current-output-port" FLAG-DISPLAY)
+        (cons "current-input-port" FLAG-FILE-IO)
         (cons "string?" FLAG-STRING-OPS)
         (cons "string-length" FLAG-STRING-OPS)
         (cons "string-ref" FLAG-STRING-OPS)
