@@ -1,4 +1,4 @@
-(import (app ui))
+(import (puppykit ui))
 
 (include "app/hello.scm")
 (include "app/counter.scm")

@@ -1,9 +1,7 @@
-;;; Binary opcode serialization for web components
+;;; Binary opcode serialization
 ;;;
 ;;; Serializes opcode tuples from the html macro into 32-byte binary
 ;;; records readable by the JS runtime.
-
-(include "html.scm")
 
 ;; Opcode tag values (32-byte records)
 (define TAG-OPEN 0)
