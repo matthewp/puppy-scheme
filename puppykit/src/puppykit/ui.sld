@@ -3,6 +3,8 @@
     ;; Component system
     define-component
     create-instance render-instance dispatch-instance
+    ;; WIT ABI exports
+    create render dispatch alloc
     ;; HTML macro
     html
     ;; Rendering

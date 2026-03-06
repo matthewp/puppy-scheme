@@ -1,0 +1,5 @@
+package test:echo@1.0.0;
+
+world echo {
+  export echo: func(s: string) -> string;
+}
