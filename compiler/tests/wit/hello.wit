@@ -1,0 +1,5 @@
+package test:hello@1.0.0;
+
+world hello {
+  export hello: func() -> string;
+}

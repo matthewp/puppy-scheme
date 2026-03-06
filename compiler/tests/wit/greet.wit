@@ -1,0 +1,5 @@
+package test:greet@1.0.0;
+
+world greeter {
+  export greet: func(name: string) -> u32;
+}

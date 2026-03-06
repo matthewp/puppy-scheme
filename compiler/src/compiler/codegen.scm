@@ -437,7 +437,15 @@
                                     (cons (vector name uf wf
                                                   (+ wit-import-type-base i)
                                                   i) ;; import func index
-                                          acc)))))))
+                                          acc))))))
+                     (cabi-realloc-type-idx (+ wit-import-type-base n-wit-imports)))
+
+                ;; Error on string imports (not yet supported)
+                (for-each
+                 (lambda (wi)
+                   (when (wit-func-needs-memory? (vector-ref wi 2))
+                     (error "WIT imports with string types not yet supported")))
+                 wit-import-info)
 
                 ;; === Emit module ===
                 (let ((out (wbuf-make))
@@ -447,7 +455,7 @@
 
                   ;; === Type section ===
                   (wbuf-reset! sec)
-                  (wbuf-u32! sec (+ ty-user-start narity nclosure-arity nexternal-types n-wit-shims n-wit-imports))
+                  (wbuf-u32! sec (+ ty-user-start narity nclosure-arity nexternal-types n-wit-shims n-wit-imports (if wit-needs-memory 1 0)))
 
                   ;; type 0 (TY_ENV): (array (mut (ref null eq)))
                   (wbuf-byte! sec COMP-ARRAY)
@@ -610,6 +618,8 @@
                       (loop (+ i 1) (cdr es))))
 
                   ;; WIT export shim types (flat ABI)
+                  ;; MAX_FLAT_RESULTS = 1: if result flattens to >1 values,
+                  ;; return single i32 pointer to result struct (canon lift convention)
                   (for-each
                    (lambda (ws)
                      (let* ((wf (vector-ref ws 2))
@@ -619,7 +629,8 @@
                              (let loop ((ps params) (n 0))
                                (if (null? ps) n
                                    (loop (cdr ps) (+ n (length (wit-type-core-types (cdar ps))))))))
-                            (flat-result-types (if result (wit-type-core-types result) '())))
+                            (flat-result-types (if result (wit-type-core-types result) '()))
+                            (needs-result-ptr (> (length flat-result-types) 1)))
                        (wbuf-byte! sec TYPE-FUNC)
                        (wbuf-u32! sec flat-param-count)
                        (for-each
@@ -627,9 +638,12 @@
                           (for-each (lambda (ft) (wbuf-byte! sec (wit-core-type-byte ft)))
                                     (wit-type-core-types (cdr p))))
                         params)
-                       (wbuf-u32! sec (length flat-result-types))
-                       (for-each (lambda (ft) (wbuf-byte! sec (wit-core-type-byte ft)))
-                                 flat-result-types)))
+                       (if needs-result-ptr
+                           (begin (wbuf-u32! sec 1) (wbuf-byte! sec TYPE-I32))
+                           (begin
+                             (wbuf-u32! sec (length flat-result-types))
+                             (for-each (lambda (ft) (wbuf-byte! sec (wit-core-type-byte ft)))
+                                       flat-result-types)))))
                    wit-shim-info)
 
                   ;; WIT import flat-ABI types
@@ -654,6 +668,14 @@
                        (for-each (lambda (ft) (wbuf-byte! sec (wit-core-type-byte ft)))
                                  flat-result-types)))
                    wit-import-info)
+
+                  ;; cabi_realloc type: (i32 i32 i32 i32) -> i32
+                  (when wit-needs-memory
+                    (wbuf-byte! sec TYPE-FUNC)
+                    (wbuf-u32! sec 4)
+                    (wbuf-byte! sec TYPE-I32) (wbuf-byte! sec TYPE-I32)
+                    (wbuf-byte! sec TYPE-I32) (wbuf-byte! sec TYPE-I32)
+                    (wbuf-u32! sec 1) (wbuf-byte! sec TYPE-I32))
 
                   (wbuf-section! out SEC-TYPE sec)
 
@@ -715,7 +737,7 @@
 
                   ;; === Function section ===
                   (wbuf-reset! sec)
-                  (wbuf-u32! sec (+ nbuiltins nfuncs n-wit-shims (if *wit-world* 0 1)))
+                  (wbuf-u32! sec (+ nbuiltins nfuncs n-wit-shims (if *wit-world* (if wit-needs-memory 1 0) 1)))
                   (wbuf-u32! sec TY-VOID-VOID)
                   (when needs-display (wbuf-u32! sec ty-eqv))
                   (when needs-write (wbuf-u32! sec ty-eqv))
@@ -795,6 +817,9 @@
                   (for-each
                    (lambda (ws) (wbuf-u32! sec (vector-ref ws 3)))  ;; type-idx
                    wit-shim-info)
+                  ;; cabi_realloc function entry — only for WIT with memory
+                  (when (and *wit-world* wit-needs-memory)
+                    (wbuf-u32! sec cabi-realloc-type-idx))
                   ;; "run" function entry (()->i32) — only for WASI, not WIT
                   (when (not *wit-world*)
                     (wbuf-u32! sec ty-void-i32))
@@ -842,9 +867,9 @@
                     ;; === Export section ===
                     (wbuf-reset! sec)
                     (if *wit-world*
-                        ;; WIT: export memory + _start + externals + wit shims
+                        ;; WIT: export memory + _start + externals + wit shims + cabi_realloc
                         (begin
-                          (wbuf-u32! sec (+ 2 nexternals n-wit-shims))
+                          (wbuf-u32! sec (+ 2 nexternals n-wit-shims (if wit-needs-memory 1 0)))
                           (wbuf-name! sec "memory")
                           (wbuf-byte! sec #x02) (wbuf-u32! sec 0)
                           (wbuf-name! sec "_start")
@@ -860,7 +885,11 @@
                              (wbuf-name! sec (vector-ref ws 0))
                              (wbuf-byte! sec #x00)
                              (wbuf-u32! sec (vector-ref ws 4)))
-                           wit-shim-info))
+                           wit-shim-info)
+                          (when wit-needs-memory
+                            (wbuf-name! sec "cabi_realloc")
+                            (wbuf-byte! sec #x00)
+                            (wbuf-u32! sec (+ wit-shim-func-base n-wit-shims))))
                         ;; WASI: export only "run"
                         (begin
                           (wbuf-u32! sec 1)
@@ -983,7 +1012,7 @@
                             (wbuf-byte! body OP-END)
 
                             (wbuf-reset! sec)
-                            (wbuf-u32! sec (+ nbuiltins nfuncs n-wit-shims (if *wit-world* 0 1)))
+                            (wbuf-u32! sec (+ nbuiltins nfuncs n-wit-shims (if *wit-world* (if wit-needs-memory 1 0) 1)))
                             (wbuf-func-body! sec body)
 
                             ;; === Builtin bodies (via C FFI) ===
@@ -1637,16 +1666,16 @@
                                                                (+ n 1) n)))))
                                               (result-is-string (and result (wit-type-needs-memory? result))))
                                          (if (> nstring-params 0)
-                                             ;; Need extra locals: nstring eqref (string refs) + nstring i32 (loop counters)
+                                             ;; Need extra locals: nstring (ref null TY-STRING) (string refs) + nstring i32 (loop counters)
                                              ;; + if result is string: 3 more i32 (ptr, len, loop-i) + 1 (ref null TY-STRING)
                                              (let ((n-extra-i32 (+ nstring-params (if result-is-string 3 0))))
                                                (if result-is-string
                                                    (begin (wbuf-u32! sbody 3)
-                                                          (wbuf-u32! sbody nstring-params) (wbuf-byte! sbody HT-EQ)
+                                                          (wbuf-u32! sbody nstring-params) (wbuf-byte! sbody REF-NULL-TYPE) (wbuf-u32! sbody TY-STRING)
                                                           (wbuf-u32! sbody 1) (wbuf-byte! sbody REF-NULL-TYPE) (wbuf-u32! sbody TY-STRING)
                                                           (wbuf-u32! sbody n-extra-i32) (wbuf-byte! sbody TYPE-I32))
                                                    (begin (wbuf-u32! sbody 2)
-                                                          (wbuf-u32! sbody nstring-params) (wbuf-byte! sbody HT-EQ)
+                                                          (wbuf-u32! sbody nstring-params) (wbuf-byte! sbody REF-NULL-TYPE) (wbuf-u32! sbody TY-STRING)
                                                           (wbuf-u32! sbody n-extra-i32) (wbuf-byte! sbody TYPE-I32))))
                                              (if result-is-string
                                                  ;; Only result needs string handling: 1 (ref null TY-STRING) + 3 i32 (ptr, len, loop-i)
@@ -1710,7 +1739,8 @@
                                          ;; Unbox result
                                          (if result
                                              (if result-is-string
-                                                 ;; String result: convert GC string to (ptr, len)
+                                                 ;; String result: convert GC string to (ptr, len), return result struct ptr
+                                                 ;; canon lift convention: return single i32 pointing to result struct
                                                  (let ((local-str (+ nflat nstring-params))
                                                        (local-ptr (+ nflat nstring-params nstring-params 1))
                                                        (local-len (+ nflat nstring-params nstring-params 2))
@@ -1721,7 +1751,7 @@
                                                    (wbuf-byte! sbody OP-LOCAL-TEE) (wbuf-u32! sbody local-str)
                                                    (wbuf-byte! sbody OP-GC-PREFIX) (wbuf-byte! sbody GC-ARRAY-LEN)
                                                    (wbuf-byte! sbody OP-LOCAL-SET) (wbuf-u32! sbody local-len)
-                                                   ;; Bump-allocate
+                                                   ;; Bump-allocate space for string bytes
                                                    (wbuf-byte! sbody OP-GLOBAL-GET) (wbuf-u32! sbody bump-ptr-idx)
                                                    (wbuf-byte! sbody OP-LOCAL-TEE) (wbuf-u32! sbody local-ptr)
                                                    (wbuf-byte! sbody OP-LOCAL-GET) (wbuf-u32! sbody local-len)
@@ -1753,14 +1783,38 @@
                                                    (wbuf-byte! sbody OP-BR) (wbuf-u32! sbody 0)
                                                    (wbuf-byte! sbody OP-END)
                                                    (wbuf-byte! sbody OP-END)
-                                                   ;; Return ptr, len
+                                                   ;; Bump-allocate 8 bytes for result struct (ptr, len)
+                                                   (wbuf-byte! sbody OP-GLOBAL-GET) (wbuf-u32! sbody bump-ptr-idx)
+                                                   (wbuf-byte! sbody OP-GLOBAL-GET) (wbuf-u32! sbody bump-ptr-idx)
                                                    (wbuf-byte! sbody OP-LOCAL-GET) (wbuf-u32! sbody local-ptr)
-                                                   (wbuf-byte! sbody OP-LOCAL-GET) (wbuf-u32! sbody local-len))
+                                                   (wbuf-byte! sbody OP-I32-STORE) (wbuf-u32! sbody 2) (wbuf-u32! sbody 0)
+                                                   (wbuf-byte! sbody OP-GLOBAL-GET) (wbuf-u32! sbody bump-ptr-idx)
+                                                   (wbuf-byte! sbody OP-LOCAL-GET) (wbuf-u32! sbody local-len)
+                                                   (wbuf-byte! sbody OP-I32-STORE) (wbuf-u32! sbody 2) (wbuf-u32! sbody 4)
+                                                   ;; Advance bump ptr by 8
+                                                   (wbuf-byte! sbody OP-GLOBAL-GET) (wbuf-u32! sbody bump-ptr-idx)
+                                                   (wbuf-byte! sbody OP-I32-CONST) (wbuf-i32! sbody 8)
+                                                   (wbuf-byte! sbody OP-I32-ADD)
+                                                   (wbuf-byte! sbody OP-GLOBAL-SET) (wbuf-u32! sbody bump-ptr-idx))
                                                  (emit-unbox-fixnum! sbody))
                                              (wbuf-byte! sbody OP-DROP))
                                          (wbuf-byte! sbody OP-END)
                                          (wbuf-func-body! sec sbody)))
                                      wit-shim-info)
+
+                                    ;; cabi_realloc function body (WIT with memory)
+                                    (when (and *wit-world* wit-needs-memory)
+                                      (let ((cbody (wbuf-make)))
+                                        (wbuf-u32! cbody 0) ;; 0 locals
+                                        ;; return current bump ptr
+                                        (wbuf-byte! cbody OP-GLOBAL-GET) (wbuf-u32! cbody bump-ptr-idx)
+                                        ;; bump ptr += new_size (param 3)
+                                        (wbuf-byte! cbody OP-GLOBAL-GET) (wbuf-u32! cbody bump-ptr-idx)
+                                        (wbuf-byte! cbody OP-LOCAL-GET) (wbuf-u32! cbody 3)
+                                        (wbuf-byte! cbody OP-I32-ADD)
+                                        (wbuf-byte! cbody OP-GLOBAL-SET) (wbuf-u32! cbody bump-ptr-idx)
+                                        (wbuf-byte! cbody OP-END)
+                                        (wbuf-func-body! sec cbody)))
 
                                     ;; "run" function — call _start, return 0 (WASI only)
                                     (when (not *wit-world*)

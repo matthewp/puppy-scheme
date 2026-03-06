@@ -2,7 +2,7 @@ package puppy:ui;
 world app {
   export create: func(type-id: u32) -> u32;
   export render: func(instance-id: u32) -> u32;
-  export dispatch: func(instance-id: u32, event-ptr: u32, event-len: u32);
+  export dispatch: func(instance-id: u32, event: string);
   export alloc: func(size: u32) -> u32;
   export root: func() -> u32;
 }

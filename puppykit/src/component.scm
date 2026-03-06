@@ -35,6 +35,20 @@
          (dispatch-fn (cdr pair)))
     (dispatch-fn event)))
 
+;;; WIT ABI exports — match app.wit function names
+
+(define (create type-id)
+  (create-instance type-id))
+
+(define (render instance-id)
+  (serialize-opcodes (render-instance instance-id)))
+
+(define (dispatch instance-id event)
+  (dispatch-instance instance-id event))
+
+(define (alloc size)
+  (linear-alloc 1 size))
+
 (define-syntax define-component
   (syntax-rules (state render dispatch)
     ;; render only
