@@ -3,6 +3,8 @@
 
 ;; WIT world for Component Model support (set by main.scm before analyze)
 (define *wit-world* #f)
+;; When true, output core module only (no component wrapping) — affects memory ownership
+(define *wit-core-only* #f)
 
 ;;; --- Simple string hash table (64-bucket, chained) ---
 ;;; Used by analyze, codegen-expr, and codegen for O(1) string lookups.

@@ -1,7 +1,35 @@
 (import (puppykit ui))
+(include "promise.scm")
+(include "fetch.scm")
+(include "cache.scm")
 (include "app/hello.scm")
 (include "app/counter.scm")
 (include "app/tabs.scm")
+
+(define version-text "")
+
+(define version-url "https://api.github.com/repos/matthewp/puppy-scheme/releases/latest")
+
+(define (strip-v s)
+  (if (and (> (string-length s) 0) (char=? (string-ref s 0) #\v))
+      (substring s 1 (string-length s))
+      s))
+
+(define (on-version-response handle)
+  (fetch-text handle
+    (lambda (handle)
+      (set! version-text (strip-v (fetch-json-get (fetch-string handle) "tag_name"))))))
+
+(define (load)
+  (cache-get version-url
+    (lambda (handle)
+      (if (cache-hit? handle)
+          (on-version-response handle)
+          (http-fetch version-url
+            (lambda (handle)
+              (when (= (fetch-status handle) 200)
+                (cache-put version-url handle 3600)
+                (on-version-response handle))))))))
 
 (define css
   (string-append
@@ -22,6 +50,8 @@
     "  margin-bottom: 0.75rem;"
     "} "
     "p { font-size: 1.125rem; color: #555; font-weight: 400; } "
+    ".version { font-size: 0.875rem; color: #999; margin-top: 0.5rem; } "
+    ".version a, .version a:visited { color: #999; } "
     ".examples { width: 100%; max-width: 40rem; padding: 0 1.5rem; } "
     "h2 {"
     "  font-size: 1.5rem; font-weight: 500;"
@@ -133,7 +163,12 @@
               (main
                 (img (@ (src "puppy-logo.webp") (alt "Puppy Scheme logo") (class "logo") (width "385") (height "279")))
                 (h1 "Puppy Scheme")
-                (p "A Scheme compiler targeting WebAssembly."))
+                (p "A Scheme compiler targeting WebAssembly.")
+                ,(if (string=? version-text "")
+                     ""
+                     (render-to-string (html (p (@ (class "version"))
+                       (a (@ (href ,(string-append "https://github.com/matthewp/puppy-scheme/releases/tag/v" version-text)))
+                         ,version-text))))))
               (section (@ (class "features"))
                 (div (@ (class "feature"))
                   (strong "WASM GC")

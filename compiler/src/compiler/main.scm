@@ -287,7 +287,9 @@
                     (begin
                       (display "error: no world found in WIT files\n" (current-error-port))
                       (exit 1))
-                    (set! *wit-world* (car (wit-package-worlds wit-pkg)))))))
+                    (set! *wit-world* (car (wit-package-worlds wit-pkg))))))
+            (when (and *wit-world* core?)
+              (set! *wit-core-only* #t)))
 
           ;; Read + include
           (let* ((t0 (if profile? (current-milliseconds) 0))
