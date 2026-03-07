@@ -1,0 +1,6 @@
+package test:lookup@1.0.0;
+
+world lookup {
+  import get-name: func(id: u32) -> string;
+  export greet: func(id: u32) -> string;
+}
