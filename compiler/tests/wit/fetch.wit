@@ -1,0 +1,9 @@
+package test:fetch@1.0.0;
+
+world fetcher {
+  import http-get: func(url: string) -> u32;
+  import response-text: func(handle: u32) -> string;
+  export load: func();
+  export deliver-response: func(handle: u32);
+  export render-page: func() -> string;
+}

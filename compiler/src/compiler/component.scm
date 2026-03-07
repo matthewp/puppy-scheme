@@ -165,6 +165,49 @@
 ;; core-module-bytes: bytevector of the compiled core WASM module
 ;; world: parsed WIT world
 ;; Returns: bytevector of the component binary
+;; Build a helper memory module with cabi_realloc starting at a given offset.
+;; Used when imports need memory and we need memory available before the core module.
+(define (build-wit-memory-module bump-start)
+  (let ((out (wbuf-make))
+        (sec (wbuf-make)))
+    (wbuf-bytes-list! out WASM-HEADER)
+    (wbuf-reset! sec)
+    (wbuf-u32! sec 1)
+    (wbuf-byte! sec TYPE-FUNC) (wbuf-u32! sec 4)
+    (wbuf-byte! sec TYPE-I32) (wbuf-byte! sec TYPE-I32)
+    (wbuf-byte! sec TYPE-I32) (wbuf-byte! sec TYPE-I32)
+    (wbuf-u32! sec 1) (wbuf-byte! sec TYPE-I32)
+    (wbuf-section! out SEC-TYPE sec)
+    (wbuf-reset! sec)
+    (wbuf-u32! sec 1) (wbuf-u32! sec 0)
+    (wbuf-section! out SEC-FUNCTION sec)
+    (wbuf-reset! sec)
+    (wbuf-u32! sec 1) (wbuf-byte! sec #x00) (wbuf-u32! sec 1)
+    (wbuf-section! out SEC-MEMORY sec)
+    (wbuf-reset! sec)
+    (wbuf-u32! sec 1)
+    (wbuf-byte! sec TYPE-I32) (wbuf-byte! sec #x01)
+    (wbuf-byte! sec OP-I32-CONST) (wbuf-i32! sec bump-start) (wbuf-byte! sec OP-END)
+    (wbuf-section! out SEC-GLOBAL sec)
+    (wbuf-reset! sec)
+    (wbuf-u32! sec 2)
+    (wbuf-name! sec "memory") (wbuf-byte! sec #x02) (wbuf-u32! sec 0)
+    (wbuf-name! sec "cabi_realloc") (wbuf-byte! sec #x00) (wbuf-u32! sec 0)
+    (wbuf-section! out SEC-EXPORT sec)
+    (wbuf-reset! sec)
+    (wbuf-u32! sec 1)
+    (let ((body (wbuf-make)))
+      (wbuf-u32! body 0)
+      (wbuf-byte! body OP-GLOBAL-GET) (wbuf-u32! body 0)
+      (wbuf-byte! body OP-GLOBAL-GET) (wbuf-u32! body 0)
+      (wbuf-byte! body OP-LOCAL-GET) (wbuf-u32! body 3)
+      (wbuf-byte! body OP-I32-ADD)
+      (wbuf-byte! body OP-GLOBAL-SET) (wbuf-u32! body 0)
+      (wbuf-byte! body OP-END)
+      (wbuf-func-body! sec body))
+    (wbuf-section! out SEC-CODE sec)
+    (wbuf->bytevector out)))
+
 (define (wrap-component core-module-bytes world)
   (let* ((exports (wit-world-func-exports world))
          (imports (wit-world-func-imports world))
@@ -176,24 +219,19 @@
                                  (and (pair? fs)
                                       (or (wit-func-needs-memory? (car fs))
                                           (loop (cdr fs)))))))
+         (any-import-needs-memory
+          (let loop ((fs imports))
+            (and (pair? fs)
+                 (or (wit-func-needs-memory? (car fs))
+                     (loop (cdr fs))))))
          (out (wbuf-make))
          (sec (wbuf-make)))
 
     ;; Component header
     (wbuf-bytes-list! out COMPONENT-HEADER)
 
-    ;; Track indices as we go
-    ;; Component type indices (from type sections)
-    ;; Component func indices (from canon lift/lower)
-    ;; Core func indices (from aliases + canon lower)
-    ;; Core memory indices (from aliases)
-
     (let* ((nimport-funcs (length imports))
            (nexport-funcs (length exports))
-           ;; Component type index allocation:
-           ;; For imports: we need instance types or func types
-           ;; For exports: we need func types
-           ;; Simplest approach: one functype per import, one per export
            (import-type-start 0)
            (export-type-start nimport-funcs))
 
@@ -210,170 +248,209 @@
         (wbuf-u32! sec nimport-funcs)
         (let loop ((funcs imports) (tidx import-type-start))
           (when (pair? funcs)
-            (wbuf-byte! sec #x00) ;; plain name discriminant
+            (wbuf-byte! sec #x00)
             (comp-emit-name! sec (wit-func-name (car funcs)))
-            (wbuf-byte! sec CEXT-FUNC) ;; func
+            (wbuf-byte! sec CEXT-FUNC)
             (wbuf-u32! sec tidx)
             (loop (cdr funcs) (+ tidx 1))))
         (wbuf-section! out CSEC-IMPORT sec))
 
-      ;; === Section 8: canon lower for imports ===
-      ;; Each import func gets lowered to a core func
-      ;; Core func indices: 0..nimport-funcs-1
-      (when (> nimport-funcs 0)
+      ;; When imports need memory, embed a helper memory module first
+      ;; so canon lower can reference its memory and realloc.
+      ;; Helper bump starts at 32768 to avoid conflicting with core module's 4096.
+      (let ((helper-realloc-idx -1)
+            (lowered-func-start 0))
+
+        (when any-import-needs-memory
+          (let ((mem-mod-bytes (build-wit-memory-module 32768)))
+            ;; Core module 0: helper
+            (wbuf-reset! sec)
+            (wbuf-bytes! sec mem-mod-bytes 0 (bytevector-length mem-mod-bytes))
+            (wbuf-section! out CSEC-CORE-MODULE sec)
+            ;; Core instance 0: instantiate helper
+            (wbuf-reset! sec)
+            (wbuf-u32! sec 1)
+            (wbuf-byte! sec #x00) (wbuf-u32! sec 0) (wbuf-u32! sec 0)
+            (wbuf-section! out CSEC-CORE-INSTANCE sec)
+            ;; Alias core memory 0 and cabi_realloc from instance 0
+            (wbuf-reset! sec)
+            (wbuf-u32! sec 2)
+            (wbuf-byte! sec #x00) (wbuf-byte! sec CSORT-MEMORY)
+            (wbuf-byte! sec ALIAS-CORE-EXPORT)
+            (wbuf-u32! sec 0) (comp-emit-name! sec "memory")
+            (wbuf-byte! sec #x00) (wbuf-byte! sec CSORT-FUNC)
+            (wbuf-byte! sec ALIAS-CORE-EXPORT)
+            (wbuf-u32! sec 0) (comp-emit-name! sec "cabi_realloc")
+            (wbuf-section! out CSEC-ALIAS sec)
+            (set! helper-realloc-idx 0)
+            (set! lowered-func-start 1)))
+
+        ;; === Canon lower for imports ===
+        (when (> nimport-funcs 0)
+          (wbuf-reset! sec)
+          (wbuf-u32! sec nimport-funcs)
+          (let loop ((funcs imports) (fidx 0))
+            (when (pair? funcs)
+              (wbuf-byte! sec CANON-LOWER) (wbuf-byte! sec #x00)
+              (wbuf-u32! sec fidx)
+              (if (and any-import-needs-memory (wit-func-needs-memory? (car funcs)))
+                  (begin
+                    (wbuf-u32! sec 3)
+                    (wbuf-byte! sec CANONOPT-MEMORY) (wbuf-u32! sec 0)
+                    (wbuf-byte! sec CANONOPT-REALLOC) (wbuf-u32! sec helper-realloc-idx)
+                    (wbuf-byte! sec CANONOPT-UTF8))
+                  (wbuf-u32! sec 0))
+              (loop (cdr funcs) (+ fidx 1))))
+          (wbuf-section! out CSEC-CANON sec))
+
+        ;; === Core inline-export instances for lowered imports ===
+        (when (> nimport-funcs 0)
+          (if any-import-needs-memory
+              ;; Two instances: "env" (lowered funcs) and "mem" (memory)
+              (begin
+                (wbuf-reset! sec)
+                (wbuf-u32! sec 2)
+                ;; Instance for "env": lowered import funcs
+                (wbuf-byte! sec #x01) ;; inline exports
+                (wbuf-u32! sec nimport-funcs)
+                (let loop ((funcs imports) (cidx lowered-func-start))
+                  (when (pair? funcs)
+                    (comp-emit-name! sec (wit-func-name (car funcs)))
+                    (wbuf-byte! sec CSORT-FUNC)
+                    (wbuf-u32! sec cidx)
+                    (loop (cdr funcs) (+ cidx 1))))
+                ;; Instance for "mem": memory from helper
+                (wbuf-byte! sec #x01)
+                (wbuf-u32! sec 1)
+                (comp-emit-name! sec "memory")
+                (wbuf-byte! sec CSORT-MEMORY)
+                (wbuf-u32! sec 0) ;; core memory 0
+                (wbuf-section! out CSEC-CORE-INSTANCE sec))
+              ;; One instance: "env" only
+              (begin
+                (wbuf-reset! sec)
+                (wbuf-u32! sec 1)
+                (wbuf-byte! sec #x01)
+                (wbuf-u32! sec nimport-funcs)
+                (let loop ((funcs imports) (cidx lowered-func-start))
+                  (when (pair? funcs)
+                    (comp-emit-name! sec (wit-func-name (car funcs)))
+                    (wbuf-byte! sec CSORT-FUNC)
+                    (wbuf-u32! sec cidx)
+                    (loop (cdr funcs) (+ cidx 1))))
+                (wbuf-section! out CSEC-CORE-INSTANCE sec))))
+
+        ;; === Core module: actual compiled module ===
         (wbuf-reset! sec)
-        (wbuf-u32! sec nimport-funcs)
-        (let loop ((funcs imports) (fidx 0))
-          (when (pair? funcs)
-            (wbuf-byte! sec CANON-LOWER) (wbuf-byte! sec #x00)
-            (wbuf-u32! sec fidx) ;; component func index
-            (if (and any-needs-memory (wit-func-needs-memory? (car funcs)))
-                ;; With memory + realloc + utf8
-                (begin
-                  (wbuf-u32! sec 3) ;; 3 options
-                  (wbuf-byte! sec CANONOPT-MEMORY) (wbuf-u32! sec 0)
-                  (wbuf-byte! sec CANONOPT-REALLOC) (wbuf-u32! sec 0)
-                  (wbuf-byte! sec CANONOPT-UTF8))
-                ;; No options needed for pure numeric
-                (wbuf-u32! sec 0))
-            (loop (cdr funcs) (+ fidx 1))))
-        (wbuf-section! out CSEC-CANON sec))
+        (wbuf-bytes! sec core-module-bytes 0 (bytevector-length core-module-bytes))
+        (wbuf-section! out CSEC-CORE-MODULE sec)
 
-      ;; === Build core instance args (lowered imports grouped by name) ===
-      ;; For imports, we need to create core instances that the core module
-      ;; can import from. Each lowered import goes into a core inline-export
-      ;; instance, grouped by the import namespace.
-      ;;
-      ;; For now, simple case: each import func becomes a separate inline
-      ;; export instance at "env"
-
-      ;; === Section 2: core inline-export instances for lowered imports ===
-      (when (> nimport-funcs 0)
-        (wbuf-reset! sec)
-        (wbuf-u32! sec 1) ;; one inline-export instance
-        (wbuf-byte! sec #x01) ;; inline exports
-        (wbuf-u32! sec nimport-funcs)
-        (let loop ((funcs imports) (cidx 0))
-          (when (pair? funcs)
-            (comp-emit-name! sec (wit-func-name (car funcs)))
-            (wbuf-byte! sec CSORT-FUNC)
-            (wbuf-u32! sec cidx) ;; core func from canon lower
-            (loop (cdr funcs) (+ cidx 1))))
-        (wbuf-section! out CSEC-CORE-INSTANCE sec))
-
-      ;; === Section 1: core module ===
-      (wbuf-reset! sec)
-      (wbuf-bytes! sec core-module-bytes 0 (bytevector-length core-module-bytes))
-      (wbuf-section! out CSEC-CORE-MODULE sec)
-
-      ;; === Section 2: core instance — instantiate core module ===
-      (wbuf-reset! sec)
-      (wbuf-u32! sec 1) ;; 1 instance
-      (wbuf-byte! sec #x00) ;; instantiate
-      (wbuf-u32! sec 0) ;; module index 0
-      (if (> nimport-funcs 0)
-          ;; With import instance
-          (begin
-            (wbuf-u32! sec 1) ;; 1 arg
+        ;; === Core instance: instantiate core module ===
+        (let* ((env-inst-idx (if any-import-needs-memory 1 0))
+               (mem-inst-idx (if any-import-needs-memory 2 -1))
+               (nargs (cond (any-import-needs-memory 2)
+                            ((> nimport-funcs 0) 1)
+                            (else 0))))
+          (wbuf-reset! sec)
+          (wbuf-u32! sec 1)
+          (wbuf-byte! sec #x00) ;; instantiate
+          (wbuf-u32! sec (if any-import-needs-memory 1 0)) ;; module index
+          (wbuf-u32! sec nargs)
+          (when (> nimport-funcs 0)
             (comp-emit-name! sec "env")
             (wbuf-byte! sec CSORT-INSTANCE)
-            (wbuf-u32! sec 0)) ;; core instance 0 (the inline-export one)
-          ;; No args
-          (wbuf-u32! sec 0))
-      (wbuf-section! out CSEC-CORE-INSTANCE sec)
+            (wbuf-u32! sec env-inst-idx))
+          (when any-import-needs-memory
+            (comp-emit-name! sec "mem")
+            (wbuf-byte! sec CSORT-INSTANCE)
+            (wbuf-u32! sec mem-inst-idx))
+          (wbuf-section! out CSEC-CORE-INSTANCE sec))
 
-      ;; The core instance index for the instantiated module:
-      ;; If we have imports: core instance 0 = inline exports, core instance 1 = module
-      ;; If no imports: core instance 0 = module
-      (let ((module-inst-idx (if (> nimport-funcs 0) 1 0)))
+        ;; Module instance index:
+        ;; With import-memory: inst 0=helper, 1=env, 2=mem, 3=module
+        ;; With imports only:  inst 0=env, 1=module
+        ;; No imports:         inst 0=module
+        (let ((module-inst-idx (cond (any-import-needs-memory 3)
+                                     ((> nimport-funcs 0) 1)
+                                     (else 0))))
 
-        ;; === Section 6: aliases from core instance ===
-        ;; We need to alias out the exported functions (and memory/realloc if needed)
-        (let* ((alias-count (+ nexport-funcs
-                               (if any-needs-memory 2 0)))
-               ;; Core func index tracking for aliases
-               ;; Start after lowered imports
-               (alias-core-func-start nimport-funcs))
+          ;; === Aliases from core instance ===
+          (let* ((alias-count (+ nexport-funcs (if any-needs-memory 2 0)))
+                 (alias-core-func-start (+ lowered-func-start nimport-funcs)))
 
-          (wbuf-reset! sec)
-          (wbuf-u32! sec alias-count)
-
-          ;; Alias memory (if needed)
-          (when any-needs-memory
-            ;; alias core export $inst "memory" (core memory)
-            (wbuf-byte! sec #x00) (wbuf-byte! sec CSORT-MEMORY) ;; sort: core memory
-            (wbuf-byte! sec ALIAS-CORE-EXPORT)
-            (wbuf-u32! sec module-inst-idx)
-            (comp-emit-name! sec "memory")
-            ;; alias core export $inst "cabi_realloc" (core func)
-            (wbuf-byte! sec #x00) (wbuf-byte! sec CSORT-FUNC) ;; sort: core func
-            (wbuf-byte! sec ALIAS-CORE-EXPORT)
-            (wbuf-u32! sec module-inst-idx)
-            (comp-emit-name! sec "cabi_realloc"))
-
-          ;; Alias each export function
-          (for-each
-           (lambda (func)
-             (wbuf-byte! sec #x00) (wbuf-byte! sec CSORT-FUNC) ;; sort: core func
-             (wbuf-byte! sec ALIAS-CORE-EXPORT)
-             (wbuf-u32! sec module-inst-idx)
-             (comp-emit-name! sec (wit-func-name func)))
-           exports)
-
-          (wbuf-section! out CSEC-ALIAS sec)
-
-          ;; === Section 7: types for export functions ===
-          (when (> nexport-funcs 0)
             (wbuf-reset! sec)
-            (wbuf-u32! sec nexport-funcs)
-            (for-each (lambda (func) (comp-emit-functype! sec func)) exports)
-            (wbuf-section! out CSEC-TYPE sec))
+            (wbuf-u32! sec alias-count)
 
-          ;; === Section 8: canon lift for exports ===
-          (when (> nexport-funcs 0)
-            (wbuf-reset! sec)
-            (wbuf-u32! sec nexport-funcs)
-            ;; Core func indices from aliases:
-            ;; If memory aliased: memory=core_memory_0, realloc=core_func_N, then export funcs
-            ;; Core func indices for aliased exports:
-            ;; nimport-funcs (from canon lower) + (if memory: 1 for realloc) + 0,1,2...
-            (let ((realloc-core-idx (if any-needs-memory
-                                        nimport-funcs ;; first aliased core func is realloc
-                                        -1))
-                  (export-core-func-start (+ nimport-funcs
-                                             (if any-needs-memory 1 0))))
-              (let loop ((funcs exports) (i 0) (tidx export-type-start))
+            (when any-needs-memory
+              (wbuf-byte! sec #x00) (wbuf-byte! sec CSORT-MEMORY)
+              (wbuf-byte! sec ALIAS-CORE-EXPORT)
+              (wbuf-u32! sec module-inst-idx)
+              (comp-emit-name! sec "memory")
+              (wbuf-byte! sec #x00) (wbuf-byte! sec CSORT-FUNC)
+              (wbuf-byte! sec ALIAS-CORE-EXPORT)
+              (wbuf-u32! sec module-inst-idx)
+              (comp-emit-name! sec "cabi_realloc"))
+
+            (for-each
+             (lambda (func)
+               (wbuf-byte! sec #x00) (wbuf-byte! sec CSORT-FUNC)
+               (wbuf-byte! sec ALIAS-CORE-EXPORT)
+               (wbuf-u32! sec module-inst-idx)
+               (comp-emit-name! sec (wit-func-name func)))
+             exports)
+
+            (wbuf-section! out CSEC-ALIAS sec)
+
+            ;; === Types for export functions ===
+            (when (> nexport-funcs 0)
+              (wbuf-reset! sec)
+              (wbuf-u32! sec nexport-funcs)
+              (for-each (lambda (func) (comp-emit-functype! sec func)) exports)
+              (wbuf-section! out CSEC-TYPE sec))
+
+            ;; === Canon lift for exports ===
+            (when (> nexport-funcs 0)
+              (wbuf-reset! sec)
+              (wbuf-u32! sec nexport-funcs)
+              ;; Core memory index for exports:
+              ;; With import-memory: memory 0 = helper's (aliased earlier), memory 1 = aliased from module
+              ;; Without: memory 0 = aliased from module
+              ;; We use the module's aliased memory (the last one aliased)
+              (let* ((export-memory-idx (if any-import-needs-memory 1 0))
+                     (realloc-core-idx (if any-needs-memory
+                                           (+ lowered-func-start nimport-funcs)
+                                           -1))
+                     (export-core-func-start (+ lowered-func-start nimport-funcs
+                                                (if any-needs-memory 1 0))))
+                (let loop ((funcs exports) (i 0) (tidx export-type-start))
+                  (when (pair? funcs)
+                    (wbuf-byte! sec CANON-LIFT) (wbuf-byte! sec #x00)
+                    (wbuf-u32! sec (+ export-core-func-start i))
+                    (if (and any-needs-memory (wit-func-needs-memory? (car funcs)))
+                        (begin
+                          (wbuf-u32! sec 3)
+                          (wbuf-byte! sec CANONOPT-UTF8)
+                          (wbuf-byte! sec CANONOPT-MEMORY) (wbuf-u32! sec export-memory-idx)
+                          (wbuf-byte! sec CANONOPT-REALLOC) (wbuf-u32! sec realloc-core-idx))
+                        (wbuf-u32! sec 0))
+                    (wbuf-u32! sec tidx)
+                    (loop (cdr funcs) (+ i 1) (+ tidx 1)))))
+              (wbuf-section! out CSEC-CANON sec))
+
+            ;; === Component exports ===
+            (when (> nexport-funcs 0)
+              (wbuf-reset! sec)
+              (wbuf-u32! sec nexport-funcs)
+              (let loop ((funcs exports) (fidx 0))
                 (when (pair? funcs)
-                  (wbuf-byte! sec CANON-LIFT) (wbuf-byte! sec #x00)
-                  (wbuf-u32! sec (+ export-core-func-start i)) ;; core func index
-                  (if (and any-needs-memory (wit-func-needs-memory? (car funcs)))
-                      ;; With options
-                      (begin
-                        (wbuf-u32! sec 3) ;; 3 options
-                        (wbuf-byte! sec CANONOPT-UTF8)
-                        (wbuf-byte! sec CANONOPT-MEMORY) (wbuf-u32! sec 0)
-                        (wbuf-byte! sec CANONOPT-REALLOC) (wbuf-u32! sec realloc-core-idx))
-                      ;; No options
-                      (wbuf-u32! sec 0))
-                  (wbuf-u32! sec tidx) ;; component type index
-                  (loop (cdr funcs) (+ i 1) (+ tidx 1)))))
-            (wbuf-section! out CSEC-CANON sec))
+                  (wbuf-byte! sec #x00)
+                  (comp-emit-name! sec (wit-func-name (car funcs)))
+                  (wbuf-byte! sec #x01) ;; sort = func
+                  (wbuf-u32! sec (+ nimport-funcs fidx))
+                  (wbuf-byte! sec #x00)
+                  (loop (cdr funcs) (+ fidx 1))))
+              (wbuf-section! out CSEC-EXPORT sec))))))
 
-          ;; === Section 11: exports ===
-          (when (> nexport-funcs 0)
-            (wbuf-reset! sec)
-            (wbuf-u32! sec nexport-funcs)
-            (let loop ((funcs exports) (fidx 0))
-              (when (pair? funcs)
-                (wbuf-byte! sec #x00) ;; plain name discriminant
-                (comp-emit-name! sec (wit-func-name (car funcs)))
-                (wbuf-byte! sec #x01) ;; sort = func
-                (wbuf-u32! sec (+ nimport-funcs fidx)) ;; component func index (imports come first from canon lower)
-                (wbuf-byte! sec #x00) ;; no type annotation
-                (loop (cdr funcs) (+ fidx 1))))
-            (wbuf-section! out CSEC-EXPORT sec)))))
-
-    ;; Return the component binary
     (wbuf->bytevector out)))
 
 ;;; --- WASI P2 Component wrapping ---

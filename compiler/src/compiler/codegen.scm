@@ -398,6 +398,11 @@
                         (and (pair? fs)
                              (or (wit-func-needs-memory? (car fs))
                                  (loop (cdr fs))))))
+                     (wit-imports-need-memory
+                      (let loop ((fs wit-imports))
+                        (and (pair? fs)
+                             (or (wit-func-needs-memory? (car fs))
+                                 (loop (cdr fs))))))
                      ;; WIT shim type indices start after external types
                      (wit-shim-type-base (+ ext-type-base nexternal-types))
                      ;; WIT shim function indices start after all user/wrapper funcs
@@ -439,13 +444,6 @@
                                                   i) ;; import func index
                                           acc))))))
                      (cabi-realloc-type-idx (+ wit-import-type-base n-wit-imports)))
-
-                ;; Error on string imports (not yet supported)
-                (for-each
-                 (lambda (wi)
-                   (when (wit-func-needs-memory? (vector-ref wi 2))
-                     (error "WIT imports with string types not yet supported")))
-                 wit-import-info)
 
                 ;; === Emit module ===
                 (let ((out (wbuf-make))
@@ -656,17 +654,24 @@
                              (let loop ((ps params) (n 0))
                                (if (null? ps) n
                                    (loop (cdr ps) (+ n (length (wit-type-core-types (cdar ps))))))))
-                            (flat-result-types (if result (wit-type-core-types result) '())))
+                            (flat-result-types (if result (wit-type-core-types result) '()))
+                            (needs-retptr (> (length flat-result-types) 1)))
                        (wbuf-byte! sec TYPE-FUNC)
-                       (wbuf-u32! sec flat-param-count)
+                       ;; canon lower retptr convention: multi-value results become extra i32 param
+                       (wbuf-u32! sec (+ flat-param-count (if needs-retptr 1 0)))
                        (for-each
                         (lambda (p)
                           (for-each (lambda (ft) (wbuf-byte! sec (wit-core-type-byte ft)))
                                     (wit-type-core-types (cdr p))))
                         params)
-                       (wbuf-u32! sec (length flat-result-types))
-                       (for-each (lambda (ft) (wbuf-byte! sec (wit-core-type-byte ft)))
-                                 flat-result-types)))
+                       (when needs-retptr
+                         (wbuf-byte! sec TYPE-I32))
+                       (if needs-retptr
+                           (wbuf-u32! sec 0)
+                           (begin
+                             (wbuf-u32! sec (length flat-result-types))
+                             (for-each (lambda (ft) (wbuf-byte! sec (wit-core-type-byte ft)))
+                                       flat-result-types)))))
                    wit-import-info)
 
                   ;; cabi_realloc type: (i32 i32 i32 i32) -> i32
@@ -680,17 +685,21 @@
                   (wbuf-section! out SEC-TYPE sec)
 
                   ;; === Import section ===
-                  (let ((total-imports (+ nimports (if *wit-world* 0 1))))
+                  (let ((total-imports (+ nimports (if *wit-world* (if wit-imports-need-memory 1 0) 1))))
                     (when (> total-imports 0)
                       (wbuf-reset! sec)
                       (wbuf-u32! sec total-imports)
                       (if *wit-world*
-                        (for-each
-                          (lambda (wi)
-                            (wbuf-name! sec "env")
-                            (wbuf-name! sec (vector-ref wi 0))
-                            (wbuf-byte! sec #x00) (wbuf-u32! sec (vector-ref wi 3)))
-                          wit-import-info)
+                        (begin
+                          (when wit-imports-need-memory
+                            (wbuf-name! sec "mem") (wbuf-name! sec "memory")
+                            (wbuf-byte! sec #x02) (wbuf-byte! sec #x00) (wbuf-u32! sec 1))
+                          (for-each
+                            (lambda (wi)
+                              (wbuf-name! sec "env")
+                              (wbuf-name! sec (vector-ref wi 0))
+                              (wbuf-byte! sec #x00) (wbuf-u32! sec (vector-ref wi 3)))
+                            wit-import-info))
                         (begin
                          ;; Memory from "mem", functions from "env"
                          (wbuf-name! sec "mem") (wbuf-name! sec "memory")
@@ -834,8 +843,8 @@
                     (wbuf-u32! sec nfuncs)
                     (wbuf-section! out SEC-TABLE sec))
 
-                  ;; Memory section: WIT modules define their own, WASI imports from component
-                  (when *wit-world*
+                  ;; Memory section: WIT modules define their own (unless imports need memory)
+                  (when (and *wit-world* (not wit-imports-need-memory))
                     (wbuf-reset! sec)
                     (wbuf-u32! sec 1)
                     (wbuf-byte! sec #x00)
@@ -1480,6 +1489,7 @@
                                                                   (result (wit-func-result wf))
                                                                   (import-idx (vector-ref wi-match 4))
                                                                   (nparams (length params))
+                                                                  (result-is-string (and result (wit-type-needs-memory? result)))
                                                                   ;; Count string params for extra locals
                                                                   (nstring-params
                                                                    (let loop ((ps params) (n 0))
@@ -1487,23 +1497,40 @@
                                                                          (loop (cdr ps)
                                                                                (if (wit-type-needs-memory? (cdar ps))
                                                                                    (+ n 1) n)))))
-                                                                  ;; 3 i32 locals per string param: ptr, len, loop-i
-                                                                  (nextra-locals (* nstring-params 3)))
+                                                                  ;; Locals: (ref null TY-STRING) for result + i32s for string params + result
+                                                                  (n-ref-locals (if result-is-string 1 0))
+                                                                  (n-i32-locals (+ (* nstring-params 3)
+                                                                                   (if result-is-string 4 0)))
+                                                                  (n-local-groups (+ (if (> n-ref-locals 0) 1 0)
+                                                                                     (if (> n-i32-locals 0) 1 0)))
+                                                                  ;; Local index bases
+                                                                  (i32-base (+ nparams n-ref-locals)))
                                                              ;; Locals declaration
-                                                             (if (> nextra-locals 0)
-                                                                 (begin
-                                                                   (wbuf-u32! ubody 1)
-                                                                   (wbuf-u32! ubody nextra-locals)
-                                                                   (wbuf-byte! ubody TYPE-I32))
-                                                                 (wbuf-u32! ubody 0))
+                                                             (wbuf-u32! ubody n-local-groups)
+                                                             (when (> n-ref-locals 0)
+                                                               (wbuf-u32! ubody n-ref-locals)
+                                                               (wbuf-byte! ubody REF-NULL-TYPE) (wbuf-u32! ubody TY-STRING))
+                                                             (when (> n-i32-locals 0)
+                                                               (wbuf-u32! ubody n-i32-locals)
+                                                               (wbuf-byte! ubody TYPE-I32))
+
+                                                             ;; If string result, bump-allocate 8 bytes for retptr
+                                                             (when result-is-string
+                                                               (let ((local-retptr (+ i32-base (* nstring-params 3))))
+                                                                 (wbuf-byte! ubody OP-GLOBAL-GET) (wbuf-u32! ubody bump-ptr-idx)
+                                                                 (wbuf-byte! ubody OP-LOCAL-TEE) (wbuf-u32! ubody local-retptr)
+                                                                 (wbuf-byte! ubody OP-I32-CONST) (wbuf-i32! ubody 8)
+                                                                 (wbuf-byte! ubody OP-I32-ADD)
+                                                                 (wbuf-byte! ubody OP-GLOBAL-SET) (wbuf-u32! ubody bump-ptr-idx)))
+
                                                              ;; Unbox each eqref param to flat ABI type(s)
                                                              (let loop ((i 0) (ps params) (str-idx 0))
                                                                (when (pair? ps)
                                                                  (if (wit-type-needs-memory? (cdar ps))
                                                                      ;; String param: copy GC string to linear memory
-                                                                     (let ((local-ptr (+ nparams (* str-idx 3)))
-                                                                           (local-len (+ nparams (* str-idx 3) 1))
-                                                                           (local-i   (+ nparams (* str-idx 3) 2)))
+                                                                     (let ((local-ptr (+ i32-base (* str-idx 3)))
+                                                                           (local-len (+ i32-base (* str-idx 3) 1))
+                                                                           (local-i   (+ i32-base (* str-idx 3) 2)))
                                                                        ;; Get string length
                                                                        (wbuf-byte! ubody OP-LOCAL-GET) (wbuf-u32! ubody i)
                                                                        (wbuf-byte! ubody OP-GC-PREFIX) (wbuf-byte! ubody GC-REF-CAST)
@@ -1554,14 +1581,65 @@
                                                                        (wbuf-byte! ubody OP-LOCAL-GET) (wbuf-u32! ubody i)
                                                                        (emit-unbox-fixnum! ubody)
                                                                        (loop (+ i 1) (cdr ps) str-idx)))))
+
+                                                             ;; If string result, push retptr as last arg
+                                                             (when result-is-string
+                                                               (let ((local-retptr (+ i32-base (* nstring-params 3))))
+                                                                 (wbuf-byte! ubody OP-LOCAL-GET) (wbuf-u32! ubody local-retptr)))
+
                                                              ;; Call the lowered import
                                                              (wbuf-byte! ubody OP-CALL) (wbuf-u32! ubody import-idx)
                                                              ;; Box result back to eqref
                                                              (if result
-                                                                 (if (wit-type-needs-memory? result)
-                                                                     ;; String result: convert (ptr, len) to GC string
-                                                                     ;; TODO: implement string return from imports
-                                                                     (emit-box-fixnum! ubody)
+                                                                 (if result-is-string
+                                                                     ;; String result: read (ptr, len) from retptr, build GC string
+                                                                     (let ((local-result-ref nparams)
+                                                                           (local-retptr   (+ i32-base (* nstring-params 3)))
+                                                                           (local-res-ptr  (+ i32-base (* nstring-params 3) 1))
+                                                                           (local-res-len  (+ i32-base (* nstring-params 3) 2))
+                                                                           (local-res-i    (+ i32-base (* nstring-params 3) 3)))
+                                                                       ;; Read ptr from mem[retptr+0]
+                                                                       (wbuf-byte! ubody OP-LOCAL-GET) (wbuf-u32! ubody local-retptr)
+                                                                       (wbuf-byte! ubody OP-I32-LOAD) (wbuf-u32! ubody 2) (wbuf-u32! ubody 0)
+                                                                       (wbuf-byte! ubody OP-LOCAL-SET) (wbuf-u32! ubody local-res-ptr)
+                                                                       ;; Read len from mem[retptr+4]
+                                                                       (wbuf-byte! ubody OP-LOCAL-GET) (wbuf-u32! ubody local-retptr)
+                                                                       (wbuf-byte! ubody OP-I32-LOAD) (wbuf-u32! ubody 2) (wbuf-u32! ubody 4)
+                                                                       (wbuf-byte! ubody OP-LOCAL-SET) (wbuf-u32! ubody local-res-len)
+                                                                       ;; array.new_default TY-STRING len
+                                                                       (wbuf-byte! ubody OP-LOCAL-GET) (wbuf-u32! ubody local-res-len)
+                                                                       (wbuf-byte! ubody OP-GC-PREFIX) (wbuf-byte! ubody GC-ARRAY-NEW-DEFAULT)
+                                                                       (wbuf-u32! ubody TY-STRING)
+                                                                       (wbuf-byte! ubody OP-LOCAL-SET) (wbuf-u32! ubody local-result-ref)
+                                                                       ;; Copy loop: i=0; while(i<len) { str[i] = mem[ptr+i]; i++ }
+                                                                       (wbuf-byte! ubody OP-I32-CONST) (wbuf-i32! ubody 0)
+                                                                       (wbuf-byte! ubody OP-LOCAL-SET) (wbuf-u32! ubody local-res-i)
+                                                                       (wbuf-byte! ubody OP-BLOCK) (wbuf-byte! ubody TYPE-VOID)
+                                                                       (wbuf-byte! ubody OP-LOOP) (wbuf-byte! ubody TYPE-VOID)
+                                                                       ;; if i >= len, break
+                                                                       (wbuf-byte! ubody OP-LOCAL-GET) (wbuf-u32! ubody local-res-i)
+                                                                       (wbuf-byte! ubody OP-LOCAL-GET) (wbuf-u32! ubody local-res-len)
+                                                                       (wbuf-byte! ubody OP-I32-GE-U)
+                                                                       (wbuf-byte! ubody OP-BR-IF) (wbuf-u32! ubody 1)
+                                                                       ;; str[i] = mem[ptr+i]
+                                                                       (wbuf-byte! ubody OP-LOCAL-GET) (wbuf-u32! ubody local-result-ref)
+                                                                       (wbuf-byte! ubody OP-LOCAL-GET) (wbuf-u32! ubody local-res-i)
+                                                                       (wbuf-byte! ubody OP-LOCAL-GET) (wbuf-u32! ubody local-res-ptr)
+                                                                       (wbuf-byte! ubody OP-LOCAL-GET) (wbuf-u32! ubody local-res-i)
+                                                                       (wbuf-byte! ubody OP-I32-ADD)
+                                                                       (wbuf-byte! ubody OP-I32-LOAD8-U) (wbuf-u32! ubody 0) (wbuf-u32! ubody 0)
+                                                                       (wbuf-byte! ubody OP-GC-PREFIX) (wbuf-byte! ubody GC-ARRAY-SET)
+                                                                       (wbuf-u32! ubody TY-STRING)
+                                                                       ;; i++
+                                                                       (wbuf-byte! ubody OP-LOCAL-GET) (wbuf-u32! ubody local-res-i)
+                                                                       (wbuf-byte! ubody OP-I32-CONST) (wbuf-i32! ubody 1)
+                                                                       (wbuf-byte! ubody OP-I32-ADD)
+                                                                       (wbuf-byte! ubody OP-LOCAL-SET) (wbuf-u32! ubody local-res-i)
+                                                                       (wbuf-byte! ubody OP-BR) (wbuf-u32! ubody 0)
+                                                                       (wbuf-byte! ubody OP-END) ;; end loop
+                                                                       (wbuf-byte! ubody OP-END) ;; end block
+                                                                       ;; Push result string ref as eqref
+                                                                       (wbuf-byte! ubody OP-LOCAL-GET) (wbuf-u32! ubody local-result-ref))
                                                                      (emit-box-fixnum! ubody))
                                                                  (emit-void! ubody))
                                                              (wbuf-byte! ubody OP-END)
