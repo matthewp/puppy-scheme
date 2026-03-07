@@ -2,6 +2,7 @@
 (include "promise.scm")
 (include "fetch.scm")
 (include "cache.scm")
+(include "async.scm")
 (include "app/hello.scm")
 (include "app/counter.scm")
 (include "app/tabs.scm")
@@ -16,20 +17,19 @@
       s))
 
 (define (on-version-response handle)
-  (fetch-text handle
-    (lambda (handle)
-      (set! version-text (strip-v (fetch-json-get (fetch-string handle) "tag_name"))))))
+  (async
+    (let ((text-handle (await (fetch-text handle))))
+      (set! version-text (strip-v (fetch-json-get (fetch-string text-handle) "tag_name"))))))
 
 (define (load)
-  (cache-get version-url
-    (lambda (handle)
+  (async
+    (let ((handle (await (cache-get version-url))))
       (if (cache-hit? handle)
           (on-version-response handle)
-          (http-fetch version-url
-            (lambda (handle)
-              (when (= (fetch-status handle) 200)
-                (cache-put version-url handle 3600)
-                (on-version-response handle))))))))
+          (let ((handle (await (http-fetch version-url))))
+            (when (= (fetch-status handle) 200)
+              (cache-put version-url handle 3600)
+              (on-version-response handle)))))))
 
 (define css
   (string-append
