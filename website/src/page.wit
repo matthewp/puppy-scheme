@@ -1,5 +1,15 @@
 package puppy:website;
 
 world page {
+  import raw-http-get: func(url: string) -> u32;
+  import raw-response-status: func(handle: u32) -> u32;
+  import raw-response-text: func(handle: u32) -> u32;
+  import raw-get-string: func(handle: u32) -> string;
+  import raw-json-get: func(json: string, key: string) -> string;
+  import raw-cache-get: func(url: string) -> u32;
+  import raw-cache-hit: func(handle: u32) -> u32;
+  import raw-cache-put: func(url: string, response-handle: u32, ttl: u32);
+  export load: func();
+  export deliver-promise-result: func(handle: u32);
   export render-page: func() -> string;
 }

@@ -398,11 +398,14 @@
                         (and (pair? fs)
                              (or (wit-func-needs-memory? (car fs))
                                  (loop (cdr fs))))))
+                     ;; Only import memory for component mode (helper module provides it)
+                     ;; In --core mode, the core module defines its own memory
                      (wit-imports-need-memory
-                      (let loop ((fs wit-imports))
-                        (and (pair? fs)
-                             (or (wit-func-needs-memory? (car fs))
-                                 (loop (cdr fs))))))
+                      (and (not *wit-core-only*)
+                           (let loop ((fs wit-imports))
+                             (and (pair? fs)
+                                  (or (wit-func-needs-memory? (car fs))
+                                      (loop (cdr fs)))))))
                      ;; WIT shim type indices start after external types
                      (wit-shim-type-base (+ ext-type-base nexternal-types))
                      ;; WIT shim function indices start after all user/wrapper funcs
