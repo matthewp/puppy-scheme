@@ -152,6 +152,7 @@
          (needs-get-env (vector-ref flags FLAG-GET-ENV))
          (needs-exit (vector-ref flags FLAG-EXIT))
          (needs-promise (vector-ref flags FLAG-PROMISE))
+         (needs-callcc (vector-ref flags FLAG-CALLCC))
          ;; Read derived booleans from index-map
          (needs-dispatch (vector-ref m IDX-NEEDS-DISPATCH))
          (needs-eqv-type (vector-ref m IDX-NEEDS-EQV-TYPE))
@@ -350,9 +351,16 @@
                       (set! nwrappers (+ nwrappers 1)))))
                 (loop (+ i 1) (cdr fs))))
 
+            ;; Ensure arity 1 is in closure-arities for escape_cont (when needs-callcc)
+            (when needs-callcc
+              (unless (member 1 closure-arities)
+                (set! closure-arities (append closure-arities (list 1)))
+                (set! nclosure-arity (+ nclosure-arity 1))))
+
             ;; Create external FFI wrapper functions
             (let ((nexternal-types 0)
-                  (ext-type-base (+ ty-user-start narity nclosure-arity)))
+                  (ext-type-base (+ ty-user-start narity nclosure-arity))
+                  (escape-cont-table-idx -1))
 
               (for-each
                (lambda (ext)
@@ -383,6 +391,19 @@
                      (ext-set-wrapper-func-idx! ext wrapper-fidx)
                      (set! funcs (append funcs (list new-uf))))))
                externals)
+
+              ;; Add escape_cont synthetic function when needs-callcc
+              (when needs-callcc
+                (let* ((callcc-ctidx (let loop ((j 0) (cas closure-arities))
+                                       (cond ((null? cas) -1)
+                                             ((= (car cas) 1) (+ ty-user-start narity j))
+                                             (else (loop (+ j 1) (cdr cas))))))
+                       (wi (length funcs))
+                       (escape-cont-fidx (+ fn-user-start wi))
+                       (new-uf (make-user-func #f escape-cont-fidx callcc-ctidx 2
+                                               '("__env__" "__k__") #f 0 #f 0)))
+                  (set! escape-cont-table-idx wi)
+                  (set! funcs (append funcs (list new-uf)))))
 
               (let* ((nfuncs (length funcs))
                      ;; WIT export shims: collect info for each WIT export
@@ -845,10 +866,15 @@
                   ;; === Global section ===
                   (let* ((needs-bump-ptr (or needs-bytevector wit-needs-memory))
                          (bump-ptr-idx -1)
-                         (sym-table-gidx -1))
-                    (when (or (> nglobals 0) needs-bump-ptr needs-symbol)
+                         (sym-table-gidx -1)
+                         (escape-id-gidx -1)
+                         (escape-val-gidx -1))
+                    (when (or (> nglobals 0) needs-bump-ptr needs-symbol needs-callcc)
                       (wbuf-reset! sec)
-                      (wbuf-u32! sec (+ nglobals (if needs-bump-ptr 1 0) (if needs-symbol 1 0)))
+                      (wbuf-u32! sec (+ nglobals
+                                        (if needs-bump-ptr 1 0)
+                                        (if needs-symbol 1 0)
+                                        (if needs-callcc 2 0)))
                       (let loop ((i 0))
                         (when (< i nglobals)
                           (wbuf-byte! sec HT-EQ) (wbuf-byte! sec #x01)
@@ -862,7 +888,25 @@
                         (set! sym-table-gidx (+ nglobals (if needs-bump-ptr 1 0)))
                         (wbuf-byte! sec HT-EQ) (wbuf-byte! sec #x01)
                         (wbuf-byte! sec OP-REF-NULL) (wbuf-byte! sec HT-EQ) (wbuf-byte! sec OP-END))
+                      (when needs-callcc
+                        ;; escape-id: i32, mutable, initialized to -1 (no active escape)
+                        (set! escape-id-gidx (+ nglobals (if needs-bump-ptr 1 0) (if needs-symbol 1 0)))
+                        (set! escape-val-gidx (+ escape-id-gidx 1))
+                        (wbuf-byte! sec TYPE-I32) (wbuf-byte! sec #x01)
+                        (wbuf-byte! sec OP-I32-CONST) (wbuf-i32! sec -1) (wbuf-byte! sec OP-END)
+                        ;; escape-val: eqref, mutable, initialized to null
+                        (wbuf-byte! sec HT-EQ) (wbuf-byte! sec #x01)
+                        (wbuf-byte! sec OP-REF-NULL) (wbuf-byte! sec HT-EQ) (wbuf-byte! sec OP-END))
                       (wbuf-section! out SEC-GLOBAL sec))
+
+                    ;; === Tag section (exception handling) ===
+                    ;; Must appear after global section (per WASM exception handling spec).
+                    (when needs-callcc
+                      (wbuf-reset! sec)
+                      (wbuf-u32! sec 1)          ;; 1 tag
+                      (wbuf-byte! sec #x00)       ;; tag attribute = 0 (exception)
+                      (wbuf-u32! sec TY-VOID-VOID) ;; type = (func) — no params, no results
+                      (wbuf-section! out SEC-TAG sec))
 
                     ;; === Export section ===
                     (wbuf-reset! sec)
@@ -972,7 +1016,10 @@
                                                fn-open-at fn-read-via-stream fn-write-via-stream
                                                fn-drop-descriptor fn-drop-input-stream fn-drop-output-stream
                                                fn-vector-fill fn-string-fill
-                                               ty-promise))
+                                               ty-promise
+                                               escape-cont-table-idx
+                                               escape-id-gidx
+                                               escape-val-gidx))
                           (ok #t))
 
                       (let ((nstart-locals (count-let-locals forms)))
@@ -1466,6 +1513,33 @@
                                                       (emit-unbox-f64! ubody ty-flonum)))
                                                    (wbuf-byte! ubody OP-END)
                                                    (wbuf-func-body! sec ubody))
+
+                                                 ;; Check if escape_cont (body-forms = #f, no WIT match)
+                                                 (if (and needs-callcc
+                                                          (not (uf-body-forms uf))
+                                                          (= (uf-func-idx uf) (+ fn-user-start escape-cont-table-idx)))
+                                                     ;; escape_cont body: (env: ref$env, k: eqref) -> eqref
+                                                     ;; Stores k in global escape-val, id from env[0] in escape-id, then throws.
+                                                     (begin
+                                                       (wbuf-u32! ubody 0) ;; no extra locals
+                                                       ;; Set global escape-val = local[1] (k = the return value)
+                                                       (wbuf-byte! ubody OP-LOCAL-GET) (wbuf-u32! ubody 1)
+                                                       (wbuf-byte! ubody OP-GLOBAL-SET) (wbuf-u32! ubody escape-val-gidx)
+                                                       ;; Set global escape-id = env[0] unboxed (local[0] = env array)
+                                                       (wbuf-byte! ubody OP-LOCAL-GET) (wbuf-u32! ubody 0)
+                                                       (wbuf-byte! ubody OP-I32-CONST) (wbuf-i32! ubody 0)
+                                                       (wbuf-byte! ubody OP-GC-PREFIX) (wbuf-byte! ubody GC-ARRAY-GET)
+                                                       (wbuf-u32! ubody TY-ENV)
+                                                       (wbuf-byte! ubody OP-GC-PREFIX) (wbuf-byte! ubody GC-REF-CAST)
+                                                       (wbuf-byte! ubody HT-I31)
+                                                       (wbuf-byte! ubody OP-GC-PREFIX) (wbuf-byte! ubody GC-I31-GET-S)
+                                                       (wbuf-byte! ubody OP-I32-CONST) (wbuf-i32! ubody 1)
+                                                       (wbuf-byte! ubody OP-I32-SHR-S) ;; unbox fixnum (>> 1)
+                                                       (wbuf-byte! ubody OP-GLOBAL-SET) (wbuf-u32! ubody escape-id-gidx)
+                                                       ;; Throw the escape exception (tag index 0)
+                                                       (wbuf-byte! ubody OP-THROW) (wbuf-u32! ubody 0)
+                                                       (wbuf-byte! ubody OP-END)
+                                                       (wbuf-func-body! sec ubody))
 
                                                  ;; Check if WIT import wrapper (body-forms = #f)
                                                  (if (not (uf-body-forms uf))

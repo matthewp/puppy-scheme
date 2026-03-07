@@ -36,6 +36,7 @@
 (define *receive-counter* 0)
 (define *string-ctor-counter* 0)
 (define *promise-counter* 0)
+(define *callcc-counter* 0)
 
 ;;; --- Hoisting ---
 
@@ -863,7 +864,8 @@
           "string-ci>?" "string-ci<=?" "string-ci>=?"
           "boolean=?"
           "rationalize"
-          "+" "-" "*" "/" "apply" "delay" "force"))
+          "+" "-" "*" "/" "apply" "delay" "force"
+          "call-with-current-continuation" "call/cc"))
       (set! *desugar-keywords* ht))))
 
 (define (post-desugar form macros depth op-str)
@@ -1046,6 +1048,21 @@
           ((and (string=? op-str "call-with-output-file") (= (length form) 3))
            (let ((result (desugar-call-with-output-file form)))
              (expand-one result macros (+ depth 1))))
+
+          ;; (call-with-current-continuation f) / (call/cc f)
+          ;; Desugar to: (let ((__callcc_N_proc f)) (%callcc __callcc_N_proc))
+          ;; This ensures f is evaluated exactly once and stored in a local for the codegen.
+          ((and (or (string=? op-str "call-with-current-continuation")
+                    (string=? op-str "call/cc"))
+                (= (length form) 2))
+           (let* ((n *callcc-counter*)
+                  (_ (set! *callcc-counter* (+ *callcc-counter* 1)))
+                  (proc-sym (string->symbol
+                               (string-append "__callcc_" (number->string n) "_proc"))))
+             (expand-one
+               (list 'let (list (list proc-sym (cadr form)))
+                     (list '%callcc proc-sym))
+               macros (+ depth 1))))
 
           ;; (string ch ...) → constructor
           ((and (string=? op-str "string") (>= (length form) 1))
@@ -1293,6 +1310,7 @@
   (set! *receive-counter* 0)
   (set! *string-ctor-counter* 0)
   (set! *promise-counter* 0)
+  (set! *callcc-counter* 0)
   (set! *macro-counter* 0)
 
   ;; Pass 1: collect macros
