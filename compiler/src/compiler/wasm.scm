@@ -18,6 +18,8 @@
 (define SEC-EXPORT   7)
 (define SEC-ELEMENT  9)
 (define SEC-CODE     10)
+(define SEC-DATA     11)
+(define SEC-DATACOUNT 12)
 
 ;; Opcodes
 (define OP-BLOCK      #x02)
@@ -134,6 +136,7 @@
 (define GC-ARRAY-NEW         #x06)
 (define GC-ARRAY-NEW-DEFAULT #x07)
 (define GC-ARRAY-NEW-FIXED   #x08)
+(define GC-ARRAY-NEW-DATA    #x09)
 (define GC-ARRAY-GET       #x0B)
 (define GC-ARRAY-GET-U     #x0D)
 (define GC-ARRAY-SET       #x0E)
@@ -178,7 +181,9 @@
 (define TY-PAIR        5)
 (define TY-STRING      6)
 (define TY-EQ-VOID     7)
-(define TY-FIXED-COUNT 8)
+(define TY-I32-EQREF   8)
+(define TY-EQREF-I32   9)
+(define TY-FIXED-COUNT 10)
 
 ;;;---------------------------------------------------------------------------
 ;;; B. Component Model binary format constants
