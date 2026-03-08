@@ -486,6 +486,12 @@
                   (wbuf-byte! sec COMP-ARRAY) (wbuf-byte! sec PACKED-I8) (wbuf-byte! sec FIELD-MUT)
                   ;; type 7 (TY_EQ_VOID)
                   (wbuf-byte! sec TYPE-FUNC) (wbuf-u32! sec 1) (wbuf-byte! sec HT-EQ) (wbuf-u32! sec 0)
+                  ;; type 8 (TY_I32_EQREF): (i32) -> (ref eq)
+                  (wbuf-byte! sec TYPE-FUNC) (wbuf-u32! sec 1) (wbuf-byte! sec TYPE-I32)
+                  (wbuf-u32! sec 1) (wbuf-byte! sec HT-EQ)
+                  ;; type 9 (TY_EQREF_I32): (ref eq) -> (i32)
+                  (wbuf-byte! sec TYPE-FUNC) (wbuf-u32! sec 1) (wbuf-byte! sec HT-EQ)
+                  (wbuf-u32! sec 1) (wbuf-byte! sec TYPE-I32)
 
                   ;; Conditional types
                   (when needs-char
@@ -824,6 +830,10 @@
                   (when needs-get-env
                     (wbuf-u32! sec ty-numstr)       ;; get-env-var (1 arg -> eqref)
                     (wbuf-u32! sec ty-void-eqref))  ;; get-env-vars (0 args -> eqref)
+                  ;; Boxing/unboxing helper functions
+                  (wbuf-u32! sec TY-I32-EQREF)    ;; box-fixnum
+                  (wbuf-u32! sec TY-EQREF-I32)    ;; unbox-fixnum
+                  (wbuf-u32! sec TY-I32-EQREF)    ;; box-bool
                   (for-each (lambda (uf) (wbuf-u32! sec (uf-type-idx uf))) funcs)
                   ;; WIT export shim function entries
                   (for-each
@@ -920,6 +930,11 @@
                       (for-each (lambda (uf) (wbuf-u32! sec (uf-func-idx uf))) funcs)
                       (wbuf-section! out SEC-ELEMENT sec))
 
+                    ;; === Data count section (must precede code section) ===
+                    (wbuf-reset! sec)
+                    (wbuf-u32! sec 1)
+                    (wbuf-section! out SEC-DATACOUNT sec)
+
                     ;; === Code section ===
 
                     (when *profile* (phase-time "  codegen/sections" codegen-t0))
@@ -927,6 +942,10 @@
                     ;; Build hash tables for O(1) lookups (once for entire compilation)
                     (init-ctx-hashes! globals funcs boxed-vars)
                     (init-codegen-ops!)
+                    (init-string-table!)
+                    (set! *fn-box-fixnum* (vector-ref m IDX-FN-BOX-FIXNUM))
+                    (set! *fn-unbox-fixnum* (vector-ref m IDX-FN-UNBOX-FIXNUM))
+                    (set! *fn-box-bool* (vector-ref m IDX-FN-BOX-BOOL))
 
                     ;; Build index vectors for wrapper/lambda lookup by func-idx
                     (let* ((nfuncs-total (length funcs))
@@ -1425,6 +1444,35 @@
                               (compile-rt! sec rt-get-env-var start-ctx)
                               (compile-rt! sec rt-get-env-vars start-ctx))
 
+                            ;; Boxing/unboxing helper function bodies
+                            (let ((hb (wbuf-make)))
+                              (wbuf-u32! hb 0)
+                              (wbuf-byte! hb OP-LOCAL-GET) (wbuf-u32! hb 0)
+                              (wbuf-byte! hb OP-I32-CONST) (wbuf-i32! hb 1)
+                              (wbuf-byte! hb OP-I32-SHL)
+                              (wbuf-byte! hb OP-GC-PREFIX) (wbuf-byte! hb GC-REF-I31)
+                              (wbuf-byte! hb OP-END)
+                              (wbuf-func-body! sec hb))
+                            (let ((hb (wbuf-make)))
+                              (wbuf-u32! hb 0)
+                              (wbuf-byte! hb OP-LOCAL-GET) (wbuf-u32! hb 0)
+                              (wbuf-byte! hb OP-GC-PREFIX) (wbuf-byte! hb GC-REF-CAST) (wbuf-byte! hb HT-I31)
+                              (wbuf-byte! hb OP-GC-PREFIX) (wbuf-byte! hb GC-I31-GET-S)
+                              (wbuf-byte! hb OP-I32-CONST) (wbuf-i32! hb 1)
+                              (wbuf-byte! hb OP-I32-SHR-S)
+                              (wbuf-byte! hb OP-END)
+                              (wbuf-func-body! sec hb))
+                            (let ((hb (wbuf-make)))
+                              (wbuf-u32! hb 0)
+                              (wbuf-byte! hb OP-LOCAL-GET) (wbuf-u32! hb 0)
+                              (wbuf-byte! hb OP-I32-CONST) (wbuf-i32! hb 1)
+                              (wbuf-byte! hb OP-I32-SHL)
+                              (wbuf-byte! hb OP-I32-CONST) (wbuf-i32! hb 1)
+                              (wbuf-byte! hb OP-I32-OR)
+                              (wbuf-byte! hb OP-GC-PREFIX) (wbuf-byte! hb GC-REF-I31)
+                              (wbuf-byte! hb OP-END)
+                              (wbuf-func-body! sec hb))
+
                             ;; === User function bodies ===
                             (when *profile* (phase-time "  codegen/builtins" codegen-t0))
                             (let ((user-ok #t))
@@ -1907,4 +1955,15 @@
                                         (wbuf-func-body! sec rbody)))
 
                                     (wbuf-section! out SEC-CODE sec)
+
+                                    ;; === Data section (passive segment with string table) ===
+                                    (let ((stab-len (wbuf-len *string-data*)))
+                                      (wbuf-reset! sec)
+                                      (wbuf-u32! sec 1)
+                                      (wbuf-byte! sec #x01)
+                                      (wbuf-u32! sec stab-len)
+                                      (when (> stab-len 0)
+                                        (wbuf-bytes! sec (wbuf-data *string-data*) 0 stab-len))
+                                      (wbuf-section! out SEC-DATA sec))
+
                                     (wbuf->bytevector out)))))))))))))))))

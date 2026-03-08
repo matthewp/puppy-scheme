@@ -48,6 +48,16 @@ All WASM index computation is centralized in `analyze.scm` via `compute-index-ma
 
 When adding new builtins: add the builtin name to `*scan-ht*`, add a FLAG constant, add dependencies to `*builtin-deps*`, and add index entries to `compute-index-map`. See `design/dead-code-elimination.md` for details.
 
+## Bootstrapping & Self-Hosting
+
+`puppyc.wasm` compiles itself. When making compiler changes:
+
+- **Always keep a working `puppyc.wasm` copy** before modifying source. Copy it (e.g., `cp puppyc.wasm puppyc-backup.wasm`) before starting any bootstrap cycle. If gen1 or gen2 fails, you can recover from the backup instead of needing the native `./puppyc`.
+- **Bootstrap cycle:** baseline → gen1 (baseline compiles new source) → gen2 (gen1 compiles itself). Gen2 should be stable (gen3 == gen2 in size).
+- **Never overwrite `puppyc.wasm` without a backup** during development. The Makefile's `make puppyc.wasm` overwrites in-place.
+- **The native `./puppyc` binary** is the last-resort bootstrap if `puppyc.wasm` gets corrupted, but it's an older version and may not match current source features.
+- **Two separate `TY_FIXED_COUNT` definitions** exist: `TY-FIXED-COUNT` in `wasm.scm` and `TY_FIXED_COUNT` in `analyze.scm`. They MUST always match.
+
 ## Code Style
 
 - C code: C11, no external dependencies beyond libc

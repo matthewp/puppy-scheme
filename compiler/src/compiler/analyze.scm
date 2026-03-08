@@ -312,7 +312,10 @@
 (define IDX-FN-VECTOR-FILL 113)
 (define IDX-FN-STRING-FILL 114)
 (define IDX-TY-PROMISE 115)
-(define IDX-MAP-SIZE 116)
+(define IDX-FN-BOX-FIXNUM 116)
+(define IDX-FN-UNBOX-FIXNUM 117)
+(define IDX-FN-BOX-BOOL 118)
+(define IDX-MAP-SIZE 119)
 
 ;; Hash table mapping builtin names to their flag index for O(1) scan
 (define *scan-ht*
@@ -668,7 +671,7 @@
 
 ;;; --- Index computation constants ---
 
-(define TY_FIXED_COUNT 8)
+(define TY_FIXED_COUNT 10)
 (define FL_COUNT 15)
 (define MATH_COUNT 11)
 
@@ -1459,6 +1462,9 @@
       (when needs-get-env
         (vector-set! m IDX-FN-GET-ENV-VAR (+ nimports nbuiltins)) (set! nbuiltins (+ nbuiltins 1))
         (vector-set! m IDX-FN-GET-ENV-VARS (+ nimports nbuiltins)) (set! nbuiltins (+ nbuiltins 1)))
+      (vector-set! m IDX-FN-BOX-FIXNUM (+ nimports nbuiltins)) (set! nbuiltins (+ nbuiltins 1))
+      (vector-set! m IDX-FN-UNBOX-FIXNUM (+ nimports nbuiltins)) (set! nbuiltins (+ nbuiltins 1))
+      (vector-set! m IDX-FN-BOX-BOOL (+ nimports nbuiltins)) (set! nbuiltins (+ nbuiltins 1))
       (vector-set! m IDX-FN-USER-START (+ nimports nbuiltins))
 
       ;; Type indices

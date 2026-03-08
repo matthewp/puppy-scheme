@@ -34,28 +34,25 @@
   (wbuf-byte! b GC-I31-GET-S))
 
 (define (emit-box-fixnum! b)
-  ;; i32 on stack → shl 1 → ref.i31 (tag-bit encoding: fixnums are even)
-  (wbuf-byte! b OP-I32-CONST) (wbuf-i32! b 1)
-  (wbuf-byte! b OP-I32-SHL)
-  (emit-box-i31! b))
+  (if (>= *fn-box-fixnum* 0)
+      (begin (wbuf-byte! b OP-CALL) (wbuf-u32! b *fn-box-fixnum*))
+      (begin (wbuf-byte! b OP-I32-CONST) (wbuf-i32! b 1)
+             (wbuf-byte! b OP-I32-SHL) (emit-box-i31! b))))
 
 (define (emit-unbox-fixnum! b)
-  ;; eqref → ref.cast i31 → i31.get_s → shr_s 1 → i32
-  (wbuf-byte! b OP-GC-PREFIX)
-  (wbuf-byte! b GC-REF-CAST)
-  (wbuf-byte! b HT-I31)
-  (wbuf-byte! b OP-GC-PREFIX)
-  (wbuf-byte! b GC-I31-GET-S)
-  (wbuf-byte! b OP-I32-CONST) (wbuf-i32! b 1)
-  (wbuf-byte! b OP-I32-SHR-S))
+  (if (>= *fn-unbox-fixnum* 0)
+      (begin (wbuf-byte! b OP-CALL) (wbuf-u32! b *fn-unbox-fixnum*))
+      (begin (emit-unbox-i31! b)
+             (wbuf-byte! b OP-I32-CONST) (wbuf-i32! b 1)
+             (wbuf-byte! b OP-I32-SHR-S))))
 
 (define (emit-box-bool! b)
-  ;; i32 0/1 → (x << 1) | 1 → ref.i31 (maps 0→1=#f, 1→3=#t)
-  (wbuf-byte! b OP-I32-CONST) (wbuf-i32! b 1)
-  (wbuf-byte! b OP-I32-SHL)
-  (wbuf-byte! b OP-I32-CONST) (wbuf-i32! b 1)
-  (wbuf-byte! b OP-I32-OR)
-  (emit-box-i31! b))
+  (if (>= *fn-box-bool* 0)
+      (begin (wbuf-byte! b OP-CALL) (wbuf-u32! b *fn-box-bool*))
+      (begin (wbuf-byte! b OP-I32-CONST) (wbuf-i32! b 1)
+             (wbuf-byte! b OP-I32-SHL)
+             (wbuf-byte! b OP-I32-CONST) (wbuf-i32! b 1)
+             (wbuf-byte! b OP-I32-OR) (emit-box-i31! b))))
 
 (define (emit-truthy-test! b)
   ;; Safe truthiness test for any eqref value on the stack.
@@ -322,6 +319,33 @@
 (define *cached-funcs-hash* #f)
 (define *cached-boxed-vars-hash* #f)
 
+;; Boxing/unboxing helper function indices (set per compilation)
+(define *fn-box-fixnum* -1)
+(define *fn-unbox-fixnum* -1)
+(define *fn-box-bool* -1)
+
+;; String data section table (built during codegen, emitted as passive data segment)
+(define *string-table* #f)
+(define *string-data* #f)
+
+(define (init-string-table!)
+  (set! *string-table* (make-string-ht))
+  (set! *string-data* (wbuf-make)))
+
+(define (string-table-register! str)
+  (let ((existing (string-ht-ref *string-table* str #f)))
+    (if existing
+        existing
+        (let ((offset (wbuf-len *string-data*))
+              (len (string-length str)))
+          (let loop ((i 0))
+            (when (< i len)
+              (wbuf-byte! *string-data* (char->integer (string-ref str i)))
+              (loop (+ i 1))))
+          (let ((entry (cons offset len)))
+            (string-ht-set! *string-table* str entry)
+            entry)))))
+
 (define (init-ctx-hashes! globals funcs boxed-vars)
   (let ((gh (make-string-ht))
         (fh (make-string-ht))
@@ -468,16 +492,15 @@
 ;;; --- String literal ---
 
 (define (codegen-string str body)
-  (let ((len (string-length str)))
-    (let loop ((i 0))
-      (when (< i len)
-        (wbuf-byte! body OP-I32-CONST)
-        (wbuf-i32! body (char->integer (string-ref str i)))
-        (loop (+ i 1))))
+  (let ((entry (string-table-register! str)))
+    (wbuf-byte! body OP-I32-CONST)
+    (wbuf-i32! body (car entry))
+    (wbuf-byte! body OP-I32-CONST)
+    (wbuf-i32! body (cdr entry))
     (wbuf-byte! body OP-GC-PREFIX)
-    (wbuf-byte! body GC-ARRAY-NEW-FIXED)
+    (wbuf-byte! body GC-ARRAY-NEW-DATA)
     (wbuf-u32! body TY-STRING)
-    (wbuf-u32! body len)
+    (wbuf-u32! body 0)
     #t))
 
 ;;; --- Quote ---
@@ -537,16 +560,7 @@
     ;; Symbol → interned string wrapped in struct
     ((symbol? val)
      (let ((s (symbol->string val)))
-       (let ((len (string-length s)))
-         (let loop ((i 0))
-           (when (< i len)
-             (wbuf-byte! body OP-I32-CONST)
-             (wbuf-i32! body (char->integer (string-ref s i)))
-             (loop (+ i 1))))
-         (wbuf-byte! body OP-GC-PREFIX)
-         (wbuf-byte! body GC-ARRAY-NEW-FIXED)
-         (wbuf-u32! body TY-STRING)
-         (wbuf-u32! body len))
+       (codegen-string s body)
        (let ((fn-idx (ctx-fn-intern-sym ctx)))
          (if (>= fn-idx 0)
              (begin
@@ -1085,6 +1099,7 @@
 ;; Hash table of all known operators for fast rejection of function calls.
 ;; Lazily initialized since make-string-ht is in analyze.scm.
 (define *codegen-ops* #f)
+(define *codegen-categories* #f)
 (define (init-codegen-ops!)
   (when (not *codegen-ops*)
     (let ((ht (make-string-ht)))
@@ -1147,7 +1162,7 @@
           "%make-bytevector-struct" "%bytevector-ptr" "%block-void"
           "%block-eqref" "%loop-void" "%br" "%br-if" "%local-set!" "%local-get"
           "%local-tee" "%unreachable" "%drop" "%if-i32" "%call"
-          "for-each" "when" "unless" "char?" "procedure?" "apply"
+          "for-each" "when" "unless" "procedure?" "apply"
           "emergency-exit" "get-environment-variable" "get-environment-variables"
           "%stream-write" "%get-stdout" "%get-stderr"
           "%call-get-arguments" "%call-get-environment"
@@ -1155,13 +1170,79 @@
           "%call-open-at" "%call-read-via-stream" "%call-write-via-stream"
           "%call-drop-descriptor" "%call-drop-input-stream" "%call-drop-output-stream"
           "%make-promise" "%promise-ref" "%promise-set!" "%promise-state" "%promise-set-state!" "promise?"))
+      (let ((cats (make-string-ht)))
+        (for-each (lambda (k) (string-ht-set! cats k 0))
+          '("let" "let*" "lambda" "set!" "if" "begin" "quote" "and" "or" "cond" "when" "unless"))
+        (for-each (lambda (k) (string-ht-set! cats k 1))
+          '("cons" "car" "cdr" "set-car!" "set-cdr!" "null?" "pair?" "list" "pointer->string"
+            "not" "boolean?" "number?" "complex?" "rational?" "real?" "integer?" "exact?"
+            "inexact?" "flonum?" "##ratnum?" "##cpxnum?" "##ratnum-numerator" "##ratnum-denominator"
+            "numerator" "denominator" "make-rectangular" "real-part" "##cpxnum-real"
+            "imag-part" "##cpxnum-imag" "symbol?" "symbol->string" "string->symbol" "procedure?"
+            "exact->inexact" "inexact->exact" "floor" "ceiling" "truncate" "round"
+            "sqrt" "exp" "log" "sin" "cos" "tan" "asin" "acos" "atan" "expt"
+            "zero?" "positive?" "negative?" "odd?" "even?"
+            "eq?" "eqv?" "equal?" "apply" "number->string" "string->number"))
+        (for-each (lambda (k) (string-ht-set! cats k 2))
+          '("display" "write" "current-error-port" "current-output-port" "current-input-port"
+            "newline" "exit" "emergency-exit" "get-environment-variable" "get-environment-variables"
+            "string-append" "command-line" "current-milliseconds"
+            "linear-alloc" "make-bytevector" "bytevector-length" "bytevector-u8-ref"
+            "bytevector-u8-set!" "bytevector-u32-native-ref" "bytevector-u32-native-set!"
+            "bytevector-f64-native-set!" "##flonum->ieee754-64" "bytevector->pointer"
+            "bytevector?" "bytevector-copy" "bytevector-append"
+            "utf8->string" "string->utf8"
+            "bytevector-copy-string!" "bytevector-copy!" "write-bytevector"
+            "file-exists?" "open-input-file" "open-output-file" "open-input-string"
+            "close-input-port" "close-output-port" "read-char" "peek-char" "write-char" "read"
+            "char->integer" "char=?" "char<?" "char>?" "char<=?" "char>=?"
+            "char-alphabetic?" "char-numeric?" "char-whitespace?" "char-upcase" "char-downcase"
+            "char-ci=?" "char-ci<?" "char-ci>?" "char-ci<=?" "char-ci>=?"
+            "integer->char" "eof-object?" "port?" "input-port?" "output-port?"
+            "string?" "string-length" "string-ref" "string-set!" "make-string"
+            "substring" "string-copy" "string->list" "list->string" "string=?" "string<?"
+            "string-ci=?" "string-ci<?" "string-fill!"
+            "vector?" "vector-length" "vector-ref" "vector-set!" "make-vector"
+            "vector" "vector-copy" "list->vector" "vector->list" "vector-fill!"
+            "for-each"))
+        (for-each (lambda (k) (string-ht-set! cats k 3))
+          '("+" "-" "*" "/" "quotient" "remainder" "=" "<" ">" "<=" ">="
+            "bitwise-and" "bitwise-ior" "arithmetic-shift"
+            "%mem-store8" "%mem-store32" "%mem-load8" "%mem-load32" "%fd-write"
+            "%i31-add" "%i31-sub" "%i31-mul" "%i31-div" "%i31-rem"
+            "%i31-rem-u" "%i31-neg" "%i31-eqz" "%i31-eq" "%i31-lt" "%i31-gt"
+            "%i31-le" "%i31-ge" "%i31-and" "%i31-xor" "%i31-or" "%i31-shl"
+            "%i31-div-u" "%i31-ge-u" "%i31-ne" "%i31?" "%flonum?" "%rational?" "%complex?"
+            "char?" "%char?" "%string?" "%symbol?" "%pair?" "%car" "%cdr" "%ref-eq" "%ref-null"
+            "%ref-is-null" "%f64-add" "%f64-sub" "%f64-mul" "%f64-div" "%f64-neg"
+            "%f64-abs" "%f64-sqrt" "%f64-floor" "%f64-ceil" "%f64-trunc"
+            "%f64-nearest" "%f64-copysign" "%f64-eq" "%f64-ne" "%f64-lt" "%f64-gt"
+            "%f64-le" "%f64-ge" "%f64-convert-i31" "%f64-trunc-to-i31"
+            "%rational-num" "%rational-den" "%make-rational" "%complex-real"
+            "%complex-imag" "%make-complex-raw" "%char-code" "%make-char"
+            "%symbol-string" "%string-length" "%string-ref" "%string-set!"
+            "%make-string" "%vector-length" "%vector-ref" "%vector-set!"
+            "%make-vector" "%memory-size" "%memory-grow" "%memory-fill"
+            "%memory-copy" "%global-get-bump-ptr" "%global-set-bump-ptr!"
+            "%wasi-args-sizes-get" "%wasi-args-get"
+            "%wasi-environ-sizes-get" "%wasi-environ-get" "%wasi-fd-read"
+            "%wasi-fd-close" "%wasi-path-open" "%make-port" "%port-fd" "%port-mode"
+            "%port-buf" "%port-set-buf!" "%port-str" "%port-pos" "%port-set-pos!"
+            "%port?" "%eof-new" "%eof?" "%unbox-f64"
+            "%f64-ldexp" "%f64-exponent" "%f64-mantissa" "%make-flonum"
+            "%make-bytevector-struct" "%bytevector-ptr" "%block-void"
+            "%block-eqref" "%loop-void" "%br" "%br-if" "%local-set!" "%local-get"
+            "%local-tee" "%unreachable" "%drop" "%if-i32" "%call"
+            "%stream-write" "%get-stdout" "%get-stderr"
+            "%call-get-arguments" "%call-get-environment"
+            "%call-get-stdin" "%call-stream-read" "%call-get-directories"
+            "%call-open-at" "%call-read-via-stream" "%call-write-via-stream"
+            "%call-drop-descriptor" "%call-drop-input-stream" "%call-drop-output-stream"
+            "%make-promise" "%promise-ref" "%promise-set!" "%promise-state" "%promise-set-state!" "promise?"))
+        (set! *codegen-categories* cats))
       (set! *codegen-ops* ht))))
 
-(define (codegen-op-dispatch op val len body ctx tail?)
- (let ((op-str (symbol->string op)))
-  ;; Fast path: if op is not a known operator, it's a function call
-  (if (not (string-ht-has? *codegen-ops* op-str))
-      (codegen-function-call op-str val len body ctx tail?)
+(define (codegen-op-control op-str val len body ctx tail?)
   (cond
     ;; Hot operators — dispatched early (inlined for forward-reference safety)
 
@@ -1471,8 +1552,10 @@
              (wbuf-byte! body OP-END)
              (loop (+ i 1)))))
        ok))
+    (else 'no-match)))
 
-    ;; cons
+(define (codegen-op-core op-str val len body ctx tail?)
+  (cond
     ((and (string=? op-str "cons") (= len 3))
      (and (codegen-expr (cadr val) body ctx)
           (codegen-expr (caddr val) body ctx)
@@ -1923,7 +2006,10 @@
 
     ((and (string=? op-str "number->string") (= len 2)) (codegen-call-1! (ctx-fn-num-to-str ctx) val body ctx))
     ((and (string=? op-str "string->number") (= len 2)) (codegen-call-1! (ctx-fn-str-to-num ctx) val body ctx))
+    (else 'no-match)))
 
+(define (codegen-op-io-data op-str val len body ctx tail?)
+  (cond
     ((and (string=? op-str "display") (or (= len 2) (= len 3)))
      (codegen-io-call! (ctx-fn-display ctx) val len body ctx))
 
@@ -2629,7 +2715,10 @@
     ((and (string=? op-str "list->vector") (= len 2)) (codegen-call-1! (ctx-fn-list-to-vector ctx) val body ctx))
     ((and (string=? op-str "vector->list") (= len 2)) (codegen-call-1! (ctx-fn-vector-to-list ctx) val body ctx))
     ((and (string=? op-str "vector-fill!") (= len 3)) (codegen-call-2! (ctx-fn-vector-fill ctx) val body ctx))
+    (else 'no-match)))
 
+(define (codegen-op-low-level op-str val len body ctx tail?)
+  (cond
     ;; binary operators (= len 3 case)
     ((and (= len 3)
           (or (string=? op-str "+") (string=? op-str "-")
@@ -3421,10 +3510,22 @@
          (wbuf-byte! body (if tail? OP-RETURN-CALL OP-CALL))
          (wbuf-u32! body fn-idx))
        ok))
+    (else 'no-match)))
 
-    ;; function call (known function) or dynamic call
-    (else
-     (codegen-function-call op-str val len body ctx tail?))))))
+(define (codegen-op-dispatch op val len body ctx tail?)
+ (let ((op-str (symbol->string op)))
+  (if (not (string-ht-has? *codegen-ops* op-str))
+      (codegen-function-call op-str val len body ctx tail?)
+      (let* ((cat (string-ht-ref *codegen-categories* op-str -1))
+             (result (cond
+                       ((= cat 0) (codegen-op-control op-str val len body ctx tail?))
+                       ((= cat 1) (codegen-op-core op-str val len body ctx tail?))
+                       ((= cat 2) (codegen-op-io-data op-str val len body ctx tail?))
+                       ((= cat 3) (codegen-op-low-level op-str val len body ctx tail?))
+                       (else 'no-match))))
+        (if (eq? result 'no-match)
+            (codegen-function-call op-str val len body ctx tail?)
+            result)))))
 
 ;;; --- Function call codegen ---
 (define (codegen-function-call opname val len body ctx tail?)
